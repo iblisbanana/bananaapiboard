@@ -288,7 +288,46 @@ async function loadSettings() {
   if (!r) return
   if (r.ok) {
     const data = await r.json()
-    settings.value = { ...settings.value, ...data }
+    // 深度合并嵌套对象，避免后端返回的数据覆盖默认的嵌套结构
+    const defaultSettings = settings.value
+    settings.value = {
+      ...defaultSettings,
+      ...data,
+      // 确保嵌套对象有完整结构
+      points_cost: {
+        ...defaultSettings.points_cost,
+        ...(data.points_cost || {}),
+        'nano-banana-2': {
+          ...defaultSettings.points_cost['nano-banana-2'],
+          ...(data.points_cost?.['nano-banana-2'] || {})
+        }
+      },
+      video_config: {
+        ...defaultSettings.video_config,
+        ...(data.video_config || {}),
+        points_cost: {
+          ...defaultSettings.video_config.points_cost,
+          ...(data.video_config?.points_cost || {}),
+          'sora-2': {
+            ...defaultSettings.video_config.points_cost['sora-2'],
+            ...(data.video_config?.points_cost?.['sora-2'] || {})
+          },
+          'sora-2-pro': {
+            ...defaultSettings.video_config.points_cost['sora-2-pro'],
+            ...(data.video_config?.points_cost?.['sora-2-pro'] || {})
+          }
+        }
+      },
+      voucher_external_link: {
+        ...defaultSettings.voucher_external_link,
+        ...(data.voucher_external_link || {})
+      },
+      icp_config: {
+        ...defaultSettings.icp_config,
+        ...(data.icp_config || {})
+      },
+      invite_milestone_rewards: data.invite_milestones || data.invite_milestone_rewards || defaultSettings.invite_milestone_rewards
+    }
   }
   
   // 加载外部API配置
