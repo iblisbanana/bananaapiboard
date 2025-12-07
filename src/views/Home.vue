@@ -89,10 +89,69 @@ watch(mode, (newMode) => {
   }
 })
 
+// 图片压缩函数：长边超过maxSize则压缩
+async function compressImage(file, maxSize = 3072) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      
+      const { width, height } = img
+      const longSide = Math.max(width, height)
+      
+      // 如果长边没超过maxSize，不压缩
+      if (longSide <= maxSize) {
+        console.log(`[compress] ${file.name} 尺寸 ${width}x${height}，无需压缩`)
+        resolve(file)
+        return
+      }
+      
+      // 计算缩放比例
+      const scale = maxSize / longSide
+      const newWidth = Math.round(width * scale)
+      const newHeight = Math.round(height * scale)
+      
+      console.log(`[compress] ${file.name} 压缩: ${width}x${height} -> ${newWidth}x${newHeight}`)
+      
+      // 使用Canvas压缩
+      const canvas = document.createElement('canvas')
+      canvas.width = newWidth
+      canvas.height = newHeight
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, newWidth, newHeight)
+      
+      // 转为Blob
+      canvas.toBlob((blob) => {
+        if (blob) {
+          // 创建新的File对象，保留原文件名
+          const compressedFile = new File([blob], file.name, { 
+            type: 'image/jpeg',
+            lastModified: Date.now()
+          })
+          console.log(`[compress] ${file.name} 大小: ${Math.round(file.size/1024)}KB -> ${Math.round(blob.size/1024)}KB`)
+          resolve(compressedFile)
+        } else {
+          resolve(file) // 压缩失败，返回原文件
+        }
+      }, 'image/jpeg', 0.92) // 92%质量
+    }
+    
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      resolve(file) // 加载失败，返回原文件
+    }
+    
+    img.src = url
+  })
+}
+
 // 文件处理
-function handleFiles(files) {
+async function handleFiles(files) {
   const MAX_FILE_SIZE = 30 * 1024 * 1024 // 30MB
   const MAX_FILES = 9
+  const MAX_DIMENSION = 3072 // 长边最大尺寸
   
   // 过滤图片文件
   let fileArray = Array.from(files).filter(f => f.type.startsWith('image/'))
@@ -115,9 +174,14 @@ function handleFiles(files) {
     fileArray = fileArray.slice(0, remainingSlots)
   }
   
+  // 自动压缩：长边超过3072像素的图片
+  const compressedFiles = await Promise.all(
+    fileArray.map(file => compressImage(file, MAX_DIMENSION))
+  )
+  
   // 添加新文件
-  imageFiles.value = [...imageFiles.value, ...fileArray]
-  previewUrls.value = [...previewUrls.value, ...fileArray.map(file => URL.createObjectURL(file))]
+  imageFiles.value = [...imageFiles.value, ...compressedFiles]
+  previewUrls.value = [...previewUrls.value, ...compressedFiles.map(file => URL.createObjectURL(file))]
 }
 
 function onFilesChange(e) {
@@ -665,8 +729,8 @@ function startPolling() {
       if (taskData) {
         if (taskData.status === 'completed') {
           await updateTaskInLists(task.id, 'completed', taskData.url)
-        } else if (taskData.status === 'failed') {
-          await updateTaskInLists(task.id, 'failed', null, taskData.error || '生成失败')
+        } else if (taskData.status === 'failed' || taskData.status === 'timeout') {
+          await updateTaskInLists(task.id, 'failed', null, taskData.error || (taskData.status === 'timeout' ? '生成超时' : '生成失败'))
         }
       }
     }
@@ -696,8 +760,8 @@ async function refreshGallery() {
     if (taskData) {
       if (taskData.status === 'completed') {
         await updateTaskInLists(task.id, 'completed', taskData.url)
-      } else if (taskData.status === 'failed') {
-        await updateTaskInLists(task.id, 'failed', null, taskData.error || '生成失败')
+      } else if (taskData.status === 'failed' || taskData.status === 'timeout') {
+        await updateTaskInLists(task.id, 'failed', null, taskData.error || (taskData.status === 'timeout' ? '生成超时' : '生成失败'))
       }
     }
   }
@@ -2330,12 +2394,12 @@ onUnmounted(() => {
               </div>
             </div>
             
-            <!-- 失败状态 -->
-            <div v-else-if="it.status === 'failed'" class="relative aspect-video bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 rounded-2xl overflow-hidden">
+            <!-- 失败/超时状态 -->
+            <div v-else-if="it.status === 'failed' || it.status === 'timeout'" class="relative aspect-video bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 rounded-2xl overflow-hidden">
               <div class="absolute inset-0 flex flex-col items-center justify-center p-6">
-                <div class="text-5xl mb-4">❌</div>
-                <p class="text-red-600 dark:text-red-400 text-lg font-semibold text-center">生成失败</p>
-                <p class="text-red-500 dark:text-red-500 text-sm mt-2 text-center opacity-75">{{ it.error || '请稍后重试' }}</p>
+                <div class="text-5xl mb-4">{{ it.status === 'timeout' ? '⏰' : '❌' }}</div>
+                <p class="text-red-600 dark:text-red-400 text-lg font-semibold text-center">{{ it.status === 'timeout' ? '生成超时' : '生成失败' }}</p>
+                <p class="text-red-500 dark:text-red-500 text-sm mt-2 text-center opacity-75">{{ it.error || (it.status === 'timeout' ? '请重试' : '请稍后重试') }}</p>
                 <p class="text-sm text-green-600 dark:text-green-400 mt-4 font-medium">✓ 未扣除积分</p>
               </div>
             </div>
@@ -2446,12 +2510,12 @@ onUnmounted(() => {
               </div>
             </div>
             
-            <!-- 失败状态 -->
-            <div v-else-if="it.status === 'failed'" class="relative aspect-video bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20">
+            <!-- 失败/超时状态 -->
+            <div v-else-if="it.status === 'failed' || it.status === 'timeout'" class="relative aspect-video bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20">
               <div class="absolute inset-0 flex flex-col items-center justify-center p-3">
-                <div class="text-3xl mb-2">❌</div>
-                <p class="text-red-600 dark:text-red-400 text-xs font-semibold text-center">生成失败</p>
-                <p class="text-red-500 dark:text-red-500 text-xs mt-1.5 text-center opacity-75">{{ it.error || '请稍后重试' }}</p>
+                <div class="text-3xl mb-2">{{ it.status === 'timeout' ? '⏰' : '❌' }}</div>
+                <p class="text-red-600 dark:text-red-400 text-xs font-semibold text-center">{{ it.status === 'timeout' ? '生成超时' : '生成失败' }}</p>
+                <p class="text-red-500 dark:text-red-500 text-xs mt-1.5 text-center opacity-75">{{ it.error || (it.status === 'timeout' ? '请重试' : '请稍后重试') }}</p>
                 <p class="text-xs text-green-600 dark:text-green-400 mt-2 font-medium">✓ 未扣除积分</p>
               </div>
             </div>
@@ -2484,8 +2548,8 @@ onUnmounted(() => {
                   <span v-if="it.status === 'pending' || it.status === 'processing'" class="px-2 py-0.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full animate-pulse font-medium">
                     处理中
                   </span>
-                  <span v-else-if="it.status === 'failed'" class="px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-full font-medium">
-                    失败
+                  <span v-else-if="it.status === 'failed' || it.status === 'timeout'" class="px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-full font-medium">
+                    {{ it.status === 'timeout' ? '超时' : '失败' }}
                   </span>
                 </div>
                 <button 
@@ -2608,13 +2672,13 @@ onUnmounted(() => {
                 </div>
               </div>
               
-              <!-- 失败状态 -->
-              <div v-else-if="h.status === 'failed'" class="relative overflow-hidden">
+              <!-- 失败/超时状态 -->
+              <div v-else-if="h.status === 'failed' || h.status === 'timeout'" class="relative overflow-hidden">
                 <!-- 失败图标区域 -->
                 <div class="aspect-video bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 group relative">
                   <div class="absolute inset-0 flex flex-col items-center justify-center p-3">
-                    <div class="text-2xl mb-1">❌</div>
-                    <p class="text-xs text-red-600 dark:text-red-400 font-semibold">生成失败</p>
+                    <div class="text-2xl mb-1">{{ h.status === 'timeout' ? '⏰' : '❌' }}</div>
+                    <p class="text-xs text-red-600 dark:text-red-400 font-semibold">{{ h.status === 'timeout' ? '生成超时' : '生成失败' }}</p>
                     <p v-if="h.error" class="text-xs text-red-500 dark:text-red-400 mt-1 text-center line-clamp-2 px-2">{{ h.error }}</p>
                     <p class="text-xs text-green-600 dark:text-green-400 mt-1 font-medium">✓ 未扣除积分</p>
                   </div>
