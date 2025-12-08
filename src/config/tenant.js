@@ -2,19 +2,18 @@
  * 租户配置模块
  * 
  * 配置优先级：
- * 1. 远程配置（从后端 API 加载）- 最高优先级
+ * 1. 远程品牌配置（从后端 API /api/tenant-portal/brand-config 加载）- 最高优先级
  * 2. 本地存储配置（localStorage）
- * 3. 环境变量配置
+ * 3. 环境变量配置（仅用于租户ID和密钥）
  * 4. 默认配置
  * 
  * 环境变量：
  * - VITE_API_BASE: 后端 API 地址
  * - VITE_TENANT_ID: 租户 ID
  * - VITE_TENANT_KEY: 授权密钥
- * - VITE_BRAND_NAME: 品牌名称
- * - VITE_BRAND_LOGO: Logo URL
- * - VITE_PRIMARY_COLOR: 主色调
- * - VITE_FAVICON: Favicon URL
+ * 
+ * 注意：品牌配置（名称、Logo、主题色）从9000端口租户控制台配置，
+ * 不再使用 VITE_BRAND_* 环境变量
  */
 
 // 智能检测 API Base URL
@@ -38,7 +37,7 @@ const defaultConfig = {
   tenantId: 'default-tenant-001',
   tenantKey: 'DEFAULT-LICENSE-KEY-001',
   
-  // 品牌配置
+  // 品牌配置（默认值，会被远程配置覆盖）
   brand: {
     name: '香蕉AI',
     logo: '/logo.png',
@@ -56,17 +55,18 @@ const defaultConfig = {
   }
 }
 
-// 从环境变量读取配置
+// 从环境变量读取配置（品牌配置不再从环境变量读取）
 const envConfig = {
   apiBase: import.meta.env.VITE_API_BASE || getDefaultApiBase(),
   tenantId: import.meta.env.VITE_TENANT_ID || defaultConfig.tenantId,
   tenantKey: import.meta.env.VITE_TENANT_KEY || defaultConfig.tenantKey,
   brand: {
-    name: import.meta.env.VITE_BRAND_NAME || defaultConfig.brand.name,
-    logo: import.meta.env.VITE_BRAND_LOGO || defaultConfig.brand.logo,
-    favicon: import.meta.env.VITE_FAVICON || defaultConfig.brand.favicon,
-    primaryColor: import.meta.env.VITE_PRIMARY_COLOR || defaultConfig.brand.primaryColor,
-    description: import.meta.env.VITE_BRAND_DESCRIPTION || defaultConfig.brand.description
+    // 品牌配置使用默认值，启动时会从API加载
+    name: defaultConfig.brand.name,
+    logo: defaultConfig.brand.logo,
+    favicon: defaultConfig.brand.favicon,
+    primaryColor: defaultConfig.brand.primaryColor,
+    description: defaultConfig.brand.description
   },
   features: {
     enableVideo: import.meta.env.VITE_ENABLE_VIDEO !== 'false',
@@ -113,7 +113,89 @@ export function updateRuntimeConfig(newConfig) {
   console.log('[tenant] 运行时配置已更新:', runtimeConfig)
 }
 
-// 从后端 API 加载配置
+// 从后端 API 加载品牌配置（公开接口，无需认证）
+export async function loadBrandConfig() {
+  try {
+    console.log('[tenant] 从后端加载品牌配置...')
+    
+    // 先尝试从 localStorage 获取租户信息
+    let tenantId = runtimeConfig.tenantId
+    let tenantKey = runtimeConfig.tenantKey
+    
+    try {
+      const systemConfig = localStorage.getItem('system_config')
+      if (systemConfig) {
+        const parsed = JSON.parse(systemConfig)
+        if (parsed.tenantId) tenantId = parsed.tenantId
+        if (parsed.tenantKey) tenantKey = parsed.tenantKey
+      }
+    } catch (e) {
+      console.warn('[tenant] 读取system_config失败:', e)
+    }
+    
+    // 调用公开的品牌配置API
+    const response = await fetch('/api/tenant-portal/brand-config', {
+      headers: {
+        'X-Tenant-ID': tenantId,
+        'X-Tenant-Key': tenantKey
+      }
+    })
+    
+    if (response.ok) {
+      const data = await response.json()
+      console.log('[tenant] 品牌配置加载成功:', data)
+      
+      // 更新品牌配置
+      runtimeConfig.brand = {
+        name: data.brandName || runtimeConfig.brand.name,
+        logo: data.brandLogo || runtimeConfig.brand.logo,
+        favicon: runtimeConfig.brand.favicon,
+        primaryColor: data.primaryColor || runtimeConfig.brand.primaryColor,
+        description: data.brandDescription || runtimeConfig.brand.description
+      }
+      
+      // 保存到本地存储
+      saveToStorage(runtimeConfig)
+      
+      // 应用主题色到CSS变量
+      applyThemeColor(runtimeConfig.brand.primaryColor)
+      
+      return runtimeConfig.brand
+    } else {
+      console.warn('[tenant] 品牌配置加载失败，使用默认配置')
+    }
+  } catch (e) {
+    console.error('[tenant] 加载品牌配置失败:', e)
+  }
+  
+  return runtimeConfig.brand
+}
+
+// 应用主题色到CSS变量
+function applyThemeColor(color) {
+  if (!color || typeof document === 'undefined') return
+  
+  try {
+    document.documentElement.style.setProperty('--primary-color', color)
+    // 计算hover颜色（稍微深一点）
+    const hoverColor = adjustColor(color, -20)
+    document.documentElement.style.setProperty('--primary-color-hover', hoverColor)
+    console.log('[tenant] 主题色已应用:', color)
+  } catch (e) {
+    console.error('[tenant] 应用主题色失败:', e)
+  }
+}
+
+// 调整颜色亮度
+function adjustColor(color, amount) {
+  const hex = color.replace('#', '')
+  const r = Math.max(0, Math.min(255, parseInt(hex.substr(0, 2), 16) + amount))
+  const g = Math.max(0, Math.min(255, parseInt(hex.substr(2, 2), 16) + amount))
+  const b = Math.max(0, Math.min(255, parseInt(hex.substr(4, 2), 16) + amount))
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
+// 从后端 API 加载配置（旧接口，保留兼容性）
 export async function loadRemoteConfig() {
   try {
     // 如果没有配置 tenantId，使用默认配置
@@ -151,6 +233,9 @@ export async function loadRemoteConfig() {
       
       // 保存到本地存储
       saveToStorage(runtimeConfig)
+      
+      // 应用主题色
+      applyThemeColor(runtimeConfig.brand.primaryColor)
       
       return runtimeConfig
     } else {

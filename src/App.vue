@@ -4,6 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { getMe } from '@/api/client'
 import { getTheme, toggleTheme as toggleThemeUtil } from '@/utils/theme'
 import { getTenantHeaders } from '@/config/tenant'
+import NotificationBar from '@/components/NotificationBar.vue'
 
 const me = ref(null)
 const route = useRoute()
@@ -544,6 +545,9 @@ async function copyInviteLink() {
         </div>
       </div>
     </nav>
+
+    <!-- 通知栏 -->
+    <NotificationBar />
 
     <!-- 主内容区 -->
     <main class="flex-1">

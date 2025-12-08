@@ -299,10 +299,10 @@
     </div>
     
     <!-- 套餐购买确认模态框 -->
-    <div v-if="showPurchaseModal && selectedPackage && purchaseInfo" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @click.self="closePurchaseModal">
-      <div class="bg-white dark:bg-dark-700 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden animate-scale-in">
+    <div v-if="showPurchaseModal && selectedPackage && purchaseInfo" class="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/50 backdrop-blur-sm overflow-y-auto py-4 md:py-8" @click.self="closePurchaseModal">
+      <div class="bg-white dark:bg-dark-700 rounded-2xl shadow-2xl w-full max-w-2xl mx-4 my-auto max-h-[95vh] md:max-h-[90vh] flex flex-col animate-scale-in">
         <!-- 头部 -->
-        <div class="p-6 border-b border-slate-200 dark:border-dark-600 bg-gradient-to-r from-primary-500 to-purple-500">
+        <div class="p-6 border-b border-slate-200 dark:border-dark-600 bg-gradient-to-r from-primary-500 to-purple-500 flex-shrink-0">
           <div class="flex items-center justify-between">
             <div class="flex items-center space-x-3">
               <div class="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
@@ -324,7 +324,7 @@
         </div>
 
         <!-- 内容 -->
-        <div class="p-6 space-y-6">
+        <div class="p-6 space-y-6 overflow-y-auto flex-1 min-h-0">
           <!-- 套餐信息 -->
           <div class="bg-gradient-to-br from-primary-50 to-purple-50 dark:from-primary-900/20 dark:to-purple-900/20 rounded-xl p-6 border border-primary-200 dark:border-primary-800">
             <div class="flex items-center justify-between mb-4">
@@ -519,7 +519,7 @@
         </div>
 
         <!-- 底部按钮 -->
-        <div class="p-6 border-t border-slate-200 dark:border-dark-600 bg-slate-50 dark:bg-dark-800 flex gap-3">
+        <div class="p-6 border-t border-slate-200 dark:border-dark-600 bg-slate-50 dark:bg-dark-800 flex gap-3 flex-shrink-0">
           <button
             @click="closePurchaseModal"
             :disabled="purchaseLoading"

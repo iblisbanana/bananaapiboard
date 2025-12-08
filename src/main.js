@@ -6,6 +6,7 @@ import App from './App.vue'
 import router from './router'
 import { initTheme } from './utils/theme'
 import { initLogger, logPageView } from './utils/logger'
+import { loadBrandConfig, getBrand } from './config/tenant'
 
 // 在应用启动前初始化主题，确保默认是浅色模式
 initTheme()
@@ -13,15 +14,14 @@ initTheme()
 // 初始化前端日志系统（暂时禁用，避免CORS错误）
 initLogger({ enabled: false })
 
-// 初始化系统配置（从环境变量读取租户配置）
+// 初始化系统配置（从环境变量读取租户ID和密钥）
+// 注意：品牌配置（名称、Logo、主题色）从API动态获取，不再使用环境变量
 function initSystemConfig() {
   try {
-    // 从环境变量读取租户配置，如果没有则使用默认值
+    // 只从环境变量读取租户ID和密钥，品牌配置从API获取
     const envConfig = {
       tenantId: import.meta.env.VITE_TENANT_ID || 'default-tenant-001',
       tenantKey: import.meta.env.VITE_TENANT_KEY || 'DEFAULT-LICENSE-KEY-001',
-      brandName: import.meta.env.VITE_BRAND_NAME || '香蕉AI',
-      primaryColor: import.meta.env.VITE_PRIMARY_COLOR || '#FBBF24',
       apiBase: import.meta.env.VITE_API_BASE || ''
     }
     
@@ -62,15 +62,39 @@ function initSystemConfig() {
   }
 }
 
+// 从API加载品牌配置并应用
+async function initBrandConfig() {
+  try {
+    console.log('[系统初始化] 开始加载品牌配置...')
+    const brand = await loadBrandConfig()
+    
+    // 更新页面标题
+    if (brand.name) {
+      document.title = brand.name
+    }
+    
+    // 更新 favicon
+    if (brand.logo) {
+      const favicon = document.querySelector('link[rel="icon"]')
+      if (favicon) {
+        favicon.href = brand.favicon || brand.logo
+      }
+    }
+    
+    console.log('[系统初始化] 品牌配置已应用:', brand.name)
+  } catch (e) {
+    console.error('[系统初始化] 品牌配置加载失败:', e)
+  }
+}
+
 initSystemConfig()
 
 // 创建并挂载应用
 const app = createApp(App)
 app.use(router)
 
-// 路由切换时记录页面访问（暂时禁用）
-// router.afterEach((to) => {
-//   logPageView(to.path, to.params)
-// })
-
+// 应用挂载后加载品牌配置
 app.mount('#app')
+
+// 异步加载品牌配置（不阻塞应用启动）
+initBrandConfig()
