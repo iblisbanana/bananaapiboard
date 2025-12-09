@@ -18,6 +18,14 @@
 </p>
 
 ---
+## ✨ 测试管理员账号
+- 超级管理员测试账号：test123
+- 超级管理员测试密码：123456
+- 演示站点访问：[http://demo.nananobanana.cn](https://demo.nananobanana.cn/)
+- 演示站点后台访问：[https://ynhlztjrenql.sealosbja.site](https://ynhlztjrenql.sealosbja.site)
+- 正式站点访问：[http://www.nananobanana.cn](https://www.nananobanana.cn/)
+
+---
 
 ## ✨ 功能特性
 
