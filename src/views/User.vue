@@ -93,6 +93,7 @@ const selectedImage = ref(null)
 // 视频查看
 const showVideoModal = ref(false)
 const selectedVideo = ref(null)
+const videoPlayerRef = ref(null)
 
 // 主题
 const currentTheme = ref(getTheme())
@@ -829,11 +830,36 @@ function viewImage(image) {
 function viewVideo(video) {
   selectedVideo.value = video
   showVideoModal.value = true
+  // 使用 setTimeout 确保 DOM 更新后再尝试播放
+  setTimeout(() => {
+    if (videoPlayerRef.value) {
+      videoPlayerRef.value.muted = false
+      videoPlayerRef.value.volume = 1
+      videoPlayerRef.value.play().catch(e => {
+        console.log('[video] 自动播放失败，需用户交互:', e.message)
+      })
+    }
+  }, 100)
 }
 
 function closeVideoModal() {
+  // 关闭模态框时暂停视频
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.pause()
+  }
   showVideoModal.value = false
   selectedVideo.value = null
+}
+
+// 视频加载完成后自动播放（带声音）
+function onUserVideoLoaded() {
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.muted = false
+    videoPlayerRef.value.volume = 1
+    videoPlayerRef.value.play().catch(e => {
+      console.log('[video] 自动播放失败:', e.message)
+    })
+  }
 }
 
 function formatVideoStatus(status) {
@@ -3755,11 +3781,13 @@ onUnmounted(() => {
         <div class="relative">
           <div class="aspect-video bg-black rounded-xl overflow-hidden shadow-2xl">
             <video
+              ref="videoPlayerRef"
               v-if="selectedVideo.video_url"
               :src="selectedVideo.video_url"
               controls
-              autoplay
+              playsinline
               class="w-full h-full object-contain"
+              @loadeddata="onUserVideoLoaded"
             ></video>
             <div v-else class="w-full h-full flex flex-col items-center justify-center text-white">
               <div class="text-6xl mb-4">⏳</div>

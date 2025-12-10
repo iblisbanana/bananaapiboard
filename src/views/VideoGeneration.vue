@@ -46,6 +46,7 @@ const pollingTimers = new Map()
 
 const showVideoModal = ref(false)
 const currentVideo = ref(null)
+const videoPlayerRef = ref(null)
 
 // 积分配置（从后端加载）
 const pointsCostConfig = ref({
@@ -684,11 +685,36 @@ async function updateVideoRating(item, rating) {
 function openVideoModal(item) {
   currentVideo.value = item
   showVideoModal.value = true
+  // 使用 nextTick 确保 DOM 更新后再尝试播放
+  setTimeout(() => {
+    if (videoPlayerRef.value) {
+      videoPlayerRef.value.muted = false
+      videoPlayerRef.value.volume = 1
+      videoPlayerRef.value.play().catch(e => {
+        console.log('[video] 自动播放失败，需用户交互:', e.message)
+      })
+    }
+  }, 100)
 }
 
 function closeVideoModal() {
+  // 关闭模态框时暂停视频
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.pause()
+  }
   showVideoModal.value = false
   currentVideo.value = null
+}
+
+// 视频加载完成后自动播放（带声音）
+function onVideoLoaded() {
+  if (videoPlayerRef.value) {
+    videoPlayerRef.value.muted = false
+    videoPlayerRef.value.volume = 1
+    videoPlayerRef.value.play().catch(e => {
+      console.log('[video] 自动播放失败:', e.message)
+    })
+  }
 }
 
 // 从历史记录再次生成
@@ -1590,11 +1616,13 @@ onUnmounted(() => {
       <div class="p-6 flex-1 overflow-y-auto space-y-4">
         <div class="rounded-xl overflow-hidden bg-black aspect-video">
           <video 
+            ref="videoPlayerRef"
             v-if="currentVideo?.video_url" 
             :src="currentVideo.video_url" 
             controls 
             class="w-full h-full object-contain"
-            autoplay
+            playsinline
+            @loadeddata="onVideoLoaded"
           ></video>
           <div v-else class="flex items-center justify-center h-full text-slate-400">
             <div class="text-center">
