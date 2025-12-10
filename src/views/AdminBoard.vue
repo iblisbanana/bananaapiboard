@@ -178,6 +178,12 @@ const settings = ref({
   external_api_key: '',
   external_api_image_path: '/v1/images/generations',
   public_url: '',
+  // 高速通道配置
+  fast_api_base: '',
+  fast_api_key: '',
+  fast_api_image_path: '/v1/images/generations',
+  fast_channel_enabled: false,
+  fast_channel_extra_points: 0,
   points_cost: {
     'nano-banana': 1,
     'nano-banana-hd': 3,
@@ -355,6 +361,11 @@ async function loadSettings() {
     settings.value.external_api_base = data.external_api_base || settings.value.external_api_base
     settings.value.external_api_image_path = data.external_api_image_path || settings.value.external_api_image_path
     settings.value.public_url = data.public_url || settings.value.public_url
+    // 高速通道配置
+    settings.value.fast_api_base = data.fast_api_base || ''
+    settings.value.fast_api_image_path = data.fast_api_image_path || '/v1/images/generations'
+    settings.value.fast_channel_enabled = data.fast_channel_enabled || false
+    settings.value.fast_channel_extra_points = data.fast_channel_extra_points || 0
   }
 }
 
@@ -591,7 +602,13 @@ async function saveSettings() {
         external_api_base: settings.value.external_api_base,
         external_api_key: settings.value.external_api_key,
         external_api_image_path: settings.value.external_api_image_path,
-        public_url: settings.value.public_url
+        public_url: settings.value.public_url,
+        // 高速通道配置
+        fast_api_base: settings.value.fast_api_base,
+        fast_api_key: settings.value.fast_api_key,
+        fast_api_image_path: settings.value.fast_api_image_path,
+        fast_channel_enabled: settings.value.fast_channel_enabled,
+        fast_channel_extra_points: settings.value.fast_channel_extra_points
       }) 
     })
     if (!r2 || !r2.ok) throw new Error('保存外部API配置失败')
@@ -4068,6 +4085,69 @@ onUnmounted(() => {
                   <br />
                   填写后端的公网访问地址（不是前端地址）
                 </p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 高速通道API配置 -->
+          <div class="pt-6 border-t border-slate-200 dark:border-dark-600">
+            <h4 class="font-semibold text-slate-900 dark:text-slate-100 mb-4 flex items-center">
+              <span class="mr-2">⚡</span>
+              高速通道API配置
+            </h4>
+            <div class="space-y-4">
+              <div class="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <p class="text-xs text-amber-700 dark:text-amber-300">
+                  💡 高速通道使用独立的API密钥，建议用户在高峰时段使用。启用后用户可以选择使用高速通道生成图片，需要额外支付积分。
+                </p>
+              </div>
+              
+              <div class="flex items-center space-x-3">
+                <input 
+                  type="checkbox" 
+                  id="fast_channel_enabled" 
+                  v-model="settings.fast_channel_enabled" 
+                  class="w-4 h-4 text-primary-600 bg-white dark:bg-dark-700 border-slate-300 dark:border-dark-500 rounded focus:ring-primary-500"
+                />
+                <label for="fast_channel_enabled" class="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  启用高速通道功能
+                </label>
+              </div>
+              
+              <div v-if="settings.fast_channel_enabled" class="space-y-4 pl-4 border-l-2 border-primary-300 dark:border-primary-700">
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    高速API基础地址
+                  </label>
+                  <input v-model="settings.fast_api_base" class="input" placeholder="https://ai.comfly.chat（留空则使用普通API地址）" />
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    高速API密钥 <span class="text-red-500">*</span>
+                  </label>
+                  <input v-model="settings.fast_api_key" class="input" placeholder="sk-..." type="password" />
+                  <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                    ⚠️ 高速通道使用的独立API密钥，建议使用不同的账户以获得更高的并发限制
+                  </p>
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    高速API接口路径
+                  </label>
+                  <input v-model="settings.fast_api_image_path" class="input" placeholder="/v1/images/generations" />
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    高速通道附加积分 <span class="text-red-500">*</span>
+                  </label>
+                  <input v-model.number="settings.fast_channel_extra_points" class="input" type="number" min="0" placeholder="0" />
+                  <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    使用高速通道时，在原有积分基础上额外扣除的积分数量。设为0表示不额外收费。
+                  </p>
+                </div>
               </div>
             </div>
           </div>
