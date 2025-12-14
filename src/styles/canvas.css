@@ -52,7 +52,7 @@
    ======================================== */
 .canvas-container {
   width: 100%;
-  height: calc(100vh - 64px); /* 减去顶部导航高度 */
+  height: 100vh;
   background: var(--canvas-bg-primary);
   position: relative;
   overflow: hidden;
@@ -742,7 +742,7 @@
 }
 
 /* ========================================
-   帮助按钮
+   帮助按钮 - 黑白灰风格
    ======================================== */
 .canvas-help-btn {
   position: absolute;
@@ -751,21 +751,26 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: var(--canvas-accent-primary);
-  border: none;
-  color: white;
+  background: rgba(40, 40, 40, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
+  font-weight: 500;
   z-index: 10;
-  box-shadow: var(--canvas-shadow-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
 }
 
 .canvas-help-btn:hover {
   transform: scale(1.05);
+  background: rgba(60, 60, 60, 0.95);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 /* ========================================

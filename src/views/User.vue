@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { redeemVoucher } from '@/api/client'
 import { getTheme, setTheme, toggleTheme as toggleThemeUtil, themes } from '@/utils/theme'
 import { getTenantHeaders, getModelDisplayName } from '@/config/tenant'
+import { formatPoints, formatBalance } from '@/utils/format'
 
 const token = localStorage.getItem('token')
 const me = ref(null)
@@ -658,7 +659,7 @@ function handleVideoScroll(event) {
 }
 
 function copyInvite() {
-  const url = `${location.origin}/auth?code=${invite.value.invite_code}`
+  const url = `${location.origin}/?invite=${invite.value.invite_code}`
   navigator.clipboard.writeText(url)
   showToast('邀请链接已复制到剪贴板！', 'success')
 }
@@ -1749,16 +1750,16 @@ onUnmounted(() => {
           <div class="bg-white dark:bg-dark-700 rounded-lg p-4 space-y-3">
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-600 dark:text-slate-400">已获得</span>
-              <span class="text-lg font-bold text-green-600 dark:text-green-400">+{{ pointsStats.package.earned }}</span>
+              <span class="text-lg font-bold text-green-600 dark:text-green-400">+{{ formatPoints(pointsStats.package.earned) }}</span>
             </div>
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-600 dark:text-slate-400">已使用</span>
-              <span class="text-lg font-bold text-red-600 dark:text-red-400">-{{ pointsStats.package.spent }}</span>
+              <span class="text-lg font-bold text-red-600 dark:text-red-400">-{{ formatPoints(pointsStats.package.spent) }}</span>
             </div>
             <div class="border-t-2 border-purple-200 dark:border-purple-700 pt-3">
               <div class="flex items-center justify-between">
                 <span class="text-base font-semibold text-purple-700 dark:text-purple-300">当前余额</span>
-                <span class="text-3xl font-bold text-purple-600 dark:text-purple-400">{{ me?.package_points || 0 }}</span>
+                <span class="text-3xl font-bold text-purple-600 dark:text-purple-400">{{ formatPoints(me?.package_points) }}</span>
               </div>
             </div>
           </div>
@@ -1779,16 +1780,16 @@ onUnmounted(() => {
           <div class="bg-white dark:bg-dark-700 rounded-lg p-4 space-y-3">
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-600 dark:text-slate-400">已获得</span>
-              <span class="text-lg font-bold text-green-600 dark:text-green-400">+{{ pointsStats.permanent.earned }}</span>
+              <span class="text-lg font-bold text-green-600 dark:text-green-400">+{{ formatPoints(pointsStats.permanent.earned) }}</span>
             </div>
             <div class="flex items-center justify-between">
               <span class="text-sm text-slate-600 dark:text-slate-400">已使用</span>
-              <span class="text-lg font-bold text-red-600 dark:text-red-400">-{{ pointsStats.permanent.spent }}</span>
+              <span class="text-lg font-bold text-red-600 dark:text-red-400">-{{ formatPoints(pointsStats.permanent.spent) }}</span>
             </div>
             <div class="border-t-2 border-blue-200 dark:border-blue-700 pt-3">
               <div class="flex items-center justify-between">
                 <span class="text-base font-semibold text-blue-700 dark:text-blue-300">当前余额</span>
-                <span class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ me?.points || 0 }}</span>
+                <span class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ formatPoints(me?.points) }}</span>
               </div>
             </div>
           </div>
@@ -2906,7 +2907,7 @@ onUnmounted(() => {
                       {{ getTransactionTypeText(source.type) }}
                     </span>
                     <span class="font-bold text-primary-600 dark:text-primary-400">
-                      +{{ source.total }} 积分
+                      +{{ formatPoints(source.total) }} 积分
                     </span>
                   </div>
                   <div class="w-full bg-slate-200 dark:bg-dark-600 rounded-full h-2 overflow-hidden">
@@ -3105,12 +3106,12 @@ onUnmounted(() => {
                       ]"
                     >
                       <div class="text-xs font-bold">{{ milestone.milestone }}人</div>
-                      <div class="text-[10px] opacity-80 mt-0.5">+{{ milestone.points }}积分</div>
+                      <div class="text-[10px] opacity-80 mt-0.5">+{{ formatPoints(milestone.points) }}积分</div>
                     </div>
                   </div>
                   <p class="text-[10px] text-center text-slate-600 dark:text-slate-400 bg-white/50 dark:bg-slate-800/50 rounded-md py-1.5 px-2">
                     💡 {{ inviteProgress.invite_count < (inviteProgress.milestones?.[0]?.milestone || 3) 
-                      ? `再邀请 ${(inviteProgress.milestones?.[0]?.milestone || 3) - inviteProgress.invite_count} 人即可获得 ${inviteProgress.milestones?.[0]?.points || 30} 积分` 
+                      ? `再邀请 ${(inviteProgress.milestones?.[0]?.milestone || 3) - inviteProgress.invite_count} 人即可获得 ${formatPoints(inviteProgress.milestones?.[0]?.points || 30)} 积分` 
                       : '达标自动发放奖励' }}
                   </p>
                 </div>
@@ -3133,7 +3134,7 @@ onUnmounted(() => {
         登录后即可查看您的积分、邀请码和积分流水记录
       </p>
       <button
-        @click="$router.push('/auth')"
+        @click="$router.push('/')"
         class="btn-primary px-8 py-3 text-lg"
       >
         👉 立即登录

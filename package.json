@@ -16,6 +16,7 @@
     "@vue-flow/minimap": "^1.5.4",
     "@vueuse/core": "^14.1.0",
     "pinia": "^3.0.4",
+    "three": "^0.182.0",
     "vue": "^3.4.29",
     "vue-router": "^4.2.5"
   },

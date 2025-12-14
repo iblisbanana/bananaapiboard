@@ -2345,7 +2345,7 @@ onUnmounted(() => {
                   新用户注册可获得奖励积分，立即开始创作吧～
                 </p>
                 <a 
-                  href="/auth" 
+                  href="/" 
                   class="mt-2 inline-block px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded-md transition-colors font-medium"
                 >
                   立即注册/登录
@@ -2386,7 +2386,7 @@ onUnmounted(() => {
               <!-- 如果是未登录错误，显示登录按钮 -->
               <a 
                 v-if="error.includes('请先登录')"
-                href="/auth" 
+                href="/" 
                 class="ml-2 px-3 py-1 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded-md transition-colors whitespace-nowrap"
               >
                 立即登录

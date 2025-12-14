@@ -54,6 +54,111 @@ export async function chatWithLLM(params) {
 }
 
 /**
+ * 流式 LLM 对话
+ * @param {Object} params
+ * @param {Array} params.messages - 消息数组
+ * @param {string} params.model - 模型ID
+ * @param {Function} params.onChunk - 接收文本块的回调函数 (chunk: string) => void
+ * @param {Function} [params.onDone] - 完成时的回调函数 (fullText: string) => void
+ * @param {Function} [params.onError] - 错误回调函数 (error: Error) => void
+ */
+export async function chatWithLLMStream(params) {
+  const { onChunk, onDone, onError, ...requestParams } = params
+  
+  try {
+    const response = await fetch(getApiUrl('/api/canvas/llm/chat'), {
+      method: 'POST',
+      headers: getHeaders({ json: true }),
+      body: JSON.stringify({
+        ...requestParams,
+        stream: true // 启用流式输出
+      })
+    })
+    
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || error.error || 'LLM 请求失败')
+    }
+    
+    // 读取流式响应
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let fullText = ''
+    let buffer = ''
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      
+      if (done) {
+        // 流结束，触发完成回调
+        if (onDone) {
+          onDone(fullText)
+        }
+        break
+      }
+      
+      // 解码数据块
+      buffer += decoder.decode(value, { stream: true })
+      
+      // 处理 SSE 格式的数据
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || '' // 保留不完整的行
+      
+      for (const line of lines) {
+        if (!line.trim() || line.startsWith(':')) continue
+        
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim()
+          
+          // 检查是否为结束标记
+          if (data === '[DONE]') {
+            if (onDone) {
+              onDone(fullText)
+            }
+            return
+          }
+          
+          try {
+            const json = JSON.parse(data)
+            
+            // OpenAI 格式的流式响应
+            if (json.choices && json.choices[0]?.delta?.content) {
+              const chunk = json.choices[0].delta.content
+              fullText += chunk
+              if (onChunk) {
+                onChunk(chunk, fullText)
+              }
+            }
+            // 自定义格式的流式响应
+            else if (json.content || json.text || json.chunk) {
+              const chunk = json.content || json.text || json.chunk
+              fullText += chunk
+              if (onChunk) {
+                onChunk(chunk, fullText)
+              }
+            }
+          } catch (e) {
+            // 如果不是 JSON，可能是纯文本
+            if (data && data !== '[DONE]') {
+              fullText += data
+              if (onChunk) {
+                onChunk(data, fullText)
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[LLM Stream] 流式请求失败:', error)
+    if (onError) {
+      onError(error)
+    }
+    throw error
+  }
+}
+
+/**
  * 通用 LLM 调用（预设动作）
  */
 async function callLLM(action, params) {

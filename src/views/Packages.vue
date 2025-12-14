@@ -109,7 +109,7 @@
               <svg class="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
               </svg>
-              <span class="text-slate-700 dark:text-slate-300">{{ pkg.points }} 积分</span>
+              <span class="text-slate-700 dark:text-slate-300">{{ formatPoints(pkg.points) }} 积分</span>
             </div>
             <div class="flex items-center gap-2">
               <svg class="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -336,7 +336,7 @@
             <div class="grid grid-cols-3 gap-4">
               <div class="text-center">
                 <div class="text-sm text-slate-500 dark:text-slate-400">赠送积分</div>
-                <div class="text-lg font-bold text-slate-900 dark:text-white">{{ selectedPackage.points }}</div>
+                <div class="text-lg font-bold text-slate-900 dark:text-white">{{ formatPoints(selectedPackage.points) }}</div>
               </div>
               <div class="text-center">
                 <div class="text-sm text-slate-500 dark:text-slate-400">并发数</div>
@@ -352,7 +352,7 @@
             <div v-if="purchaseInfo.isCurrent" class="mt-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
               <div class="text-sm text-green-800 dark:text-green-300 space-y-1">
                 <div class="font-semibold mb-2">✓ 续费说明：</div>
-                <div>• 积分累计增加 {{ selectedPackage.points }} 点</div>
+                <div>• 积分累计增加 {{ formatPoints(selectedPackage.points) }} 点</div>
                 <div>• 有效期累计延长 {{ selectedPackage.duration_days }} 天</div>
                 <div>• 并发数保持不变</div>
               </div>
@@ -694,6 +694,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { redeemVoucher, getMe } from '@/api/client'
 import { getTenantHeaders } from '@/config/tenant'
+import { formatPoints } from '@/utils/format'
 
 const router = useRouter()
 const packages = ref([])
@@ -1086,7 +1087,7 @@ async function confirmPurchase() {
       
       closePurchaseModal()
       
-      let successMessage = `${info.action}成功！\n\n已获得 ${selectedPackage.value.points} 套餐积分`
+      let successMessage = `${info.action}成功！\n\n已获得 ${formatPoints(selectedPackage.value.points)} 套餐积分`
       if (info.isCurrent) {
         successMessage += `\n有效期已延长 ${selectedPackage.value.duration_days} 天`
       } else {
@@ -1291,7 +1292,7 @@ async function submitVoucher() {
             ✅ 兑换成功！获得 ¥${(balance / 100).toFixed(2)} 余额
             
             🎉 已自动购买「${affordablePackage.name}」套餐
-            • 赠送积分：${affordablePackage.points}
+            • 赠送积分：${formatPoints(affordablePackage.points)}
             • 并发限制：${affordablePackage.concurrent_limit}个
             • 有效期：${affordablePackage.duration_days}天
             

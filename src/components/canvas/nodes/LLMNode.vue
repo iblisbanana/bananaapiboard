@@ -37,7 +37,7 @@ const LLM_TYPES = {
   },
   'llm-content-expand': {
     label: '内容扩写',
-    icon: '📝',
+    icon: '✎',
     description: 'AI 扩展内容，增加细节',
     inputType: 'text',
     outputType: 'text',

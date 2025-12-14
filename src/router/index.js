@@ -1,17 +1,24 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '@/views/Home.vue'
-import Auth from '@/views/Auth.vue'
 import User from '@/views/User.vue'
 import Packages from '@/views/Packages.vue'
 import VideoGeneration from '@/views/VideoGeneration.vue'
 import AdminBoard from '@/views/AdminBoard.vue'
 import Canvas from '@/views/Canvas.vue'
+import WorkflowList from '@/views/WorkflowList.vue'
+import Landing3D from '@/views/Landing3D.vue'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { 
       path: '/', 
+      name: 'landing',
+      component: Landing3D,
+      meta: { title: 'AI Design Unleashed' }
+    },
+    { 
+      path: '/generate', 
       name: 'home',
       component: Home,
       meta: { title: '图片生成' }
@@ -22,17 +29,22 @@ const router = createRouter({
       component: Canvas,
       meta: { title: '创作画布' }
     },
+    {
+      path: '/workflows',
+      name: 'workflows',
+      component: WorkflowList,
+      meta: { title: '工作流列表' }
+    },
     { 
       path: '/video', 
       name: 'video',
       component: VideoGeneration,
       meta: { title: '视频生成' }
     },
+    // /auth 路由已移除，登录统一从落地页进入
     { 
       path: '/auth', 
-      name: 'auth',
-      component: Auth,
-      meta: { title: '登录/注册' }
+      redirect: '/'
     },
     { 
       path: '/user', 

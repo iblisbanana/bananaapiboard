@@ -1148,10 +1148,23 @@ async function handleFileDrop(event) {
 }
 
 onMounted(() => {
-  // 初始化视口
+  console.log('[CanvasBoard] 组件已挂载，开始初始化...')
+  
+  // 初始化视口 - 增加延迟确保 VueFlow 完全就绪
+  const initViewport = () => {
+    try {
+      fitView({ padding: 0.2 })
+      console.log('[CanvasBoard] 视口初始化完成')
+    } catch (e) {
+      console.warn('[CanvasBoard] fitView 失败，重试中...', e)
+      setTimeout(initViewport, 100)
+    }
+  }
+  
+  // 等待足够长的时间确保 VueFlow 完全初始化
   setTimeout(() => {
-    fitView({ padding: 0.2 })
-  }, 100)
+    initViewport()
+  }, 200)
   
   // 添加键盘事件监听
   document.addEventListener('keydown', handleKeyDown)
@@ -1239,7 +1252,6 @@ onUnmounted(() => {
       :prevent-scrolling="true"
       :elevate-nodes-on-select="false"
       :nodes-draggable="true"
-      fit-view-on-init
       @viewport-change="handleViewportChange"
       @selection-change="handleSelectionChange"
       @edges-change="handleEdgesChange"

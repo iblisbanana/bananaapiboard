@@ -7,7 +7,7 @@
 import { ref, computed, watch, nextTick, inject, onMounted } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
-import { getLLMConfig, chatWithLLM } from '@/api/canvas/llm'
+import { getLLMConfig, chatWithLLM, chatWithLLMStream } from '@/api/canvas/llm'
 import { getApiUrl, getTenantHeaders } from '@/config/tenant'
 
 const props = defineProps({
@@ -24,6 +24,11 @@ const localText = ref(props.data.text || '')
 
 // 节点状态：'empty' | 'ready' | 'editing'
 const nodeState = ref(localText.value ? 'ready' : 'empty')
+
+// 标签编辑状态
+const isEditingLabel = ref(false)
+const labelInputRef = ref(null)
+const localLabel = ref(props.data.label || 'Text')
 
 // 编辑模式
 const isEditing = ref(false)
@@ -214,21 +219,43 @@ const upstreamImages = computed(() => {
   return images
 })
 
+// 提取纯文本，去除HTML标签和样式
+function extractPlainText(htmlContent) {
+  if (!htmlContent) return ''
+  
+  // 创建临时 div 元素来解析 HTML
+  const tempDiv = document.createElement('div')
+  tempDiv.innerHTML = htmlContent
+  
+  // 使用 innerText 获取纯文本（会保留换行，但去除HTML标签）
+  return tempDiv.innerText || tempDiv.textContent || ''
+}
+
 // 从上游节点收集文本内容
 const upstreamText = computed(() => {
   const texts = []
   for (const node of upstreamNodes.value) {
+    let textContent = ''
+    
     // 文本节点
     if (node.data?.text) {
-      texts.push(node.data.text)
+      textContent = node.data.text
     }
     // LLM 输出
     else if (node.data?.output?.content) {
-      texts.push(node.data.output.content)
+      textContent = node.data.output.content
     }
     // llmResponse
     else if (node.data?.llmResponse) {
-      texts.push(node.data.llmResponse)
+      textContent = node.data.llmResponse
+    }
+    
+    // 提取纯文本（去除HTML标签和样式）
+    if (textContent) {
+      const plainText = extractPlainText(textContent)
+      if (plainText.trim()) {
+        texts.push(plainText)
+      }
     }
   }
   return texts.join('\n\n')
@@ -243,7 +270,9 @@ const hasUpstreamInput = computed(() => inheritedText.value || inheritedImages.v
 // 处理 LLM 对话
 async function handleLLMGenerate() {
   // 获取当前节点上方显示的文本内容（作为上轮对话）
-  const currentNodeText = props.data.llmResponse || localText.value
+  const currentNodeTextRaw = props.data.llmResponse || localText.value
+  // 提取纯文本，去除HTML标签
+  const currentNodeText = extractPlainText(currentNodeTextRaw)
   
   // 检查积分（移除空值检查，允许任何情况下发送）
   if (userPoints.value < currentModelCost.value) {
@@ -257,7 +286,7 @@ async function handleLLMGenerate() {
     // 构建消息列表，包含上游内容和当前节点内容作为上下文
     const messages = []
     
-    // 如果有上游文本内容，作为更早的上下文
+    // 如果有上游文本内容，作为更早的上下文（已经是纯文本）
     if (inheritedText.value) {
       messages.push({
         role: 'assistant',
@@ -304,29 +333,109 @@ async function handleLLMGenerate() {
     
     canvasStore.updateNodeData(props.id, {
       text: llmInputText.value,
-      status: 'processing'
+      status: 'processing',
+      llmResponse: '' // 清空之前的响应
     })
     
-    const result = await chatWithLLM({
-      messages,
-      model: selectedModel.value,
-      preset: selectedPreset.value || undefined, // 功能预设
-      language: selectedLanguage.value || 'zh', // 目标语言
-      images: processedImages.length > 0 ? processedImages : undefined
-    })
+    // 先尝试流式输出，如果失败则回退到普通模式
+    let hasReceivedChunk = false
     
-    // 更新节点状态
-    canvasStore.updateNodeData(props.id, {
-      status: 'success',
-      output: {
-        type: 'text',
-        content: result.result
-      },
-      llmResponse: result.result
-    })
+    try {
+      // 使用流式输出调用 LLM API
+      await chatWithLLMStream({
+        messages,
+        model: selectedModel.value,
+        preset: selectedPreset.value || undefined,
+        language: selectedLanguage.value || 'zh',
+        images: processedImages.length > 0 ? processedImages : undefined,
+        
+        // 接收文本块的回调 - 实时更新节点内容
+        onChunk: (chunk, fullText) => {
+          hasReceivedChunk = true
+          canvasStore.updateNodeData(props.id, {
+            status: 'processing',
+            llmResponse: fullText // 实时更新显示的文本
+          })
+        },
+        
+        // 完成时的回调
+        onDone: (fullText) => {
+          canvasStore.updateNodeData(props.id, {
+            status: 'success',
+            output: {
+              type: 'text',
+              content: fullText
+            },
+            llmResponse: fullText
+          })
+          
+          // 刷新用户积分
+          window.dispatchEvent(new CustomEvent('user-info-updated'))
+          
+          isGenerating.value = false
+        },
+        
+        // 错误回调
+        onError: (error) => {
+          console.error('[TextNode] LLM 流式对话失败:', error)
+          
+          // 如果流式输出失败且还没接收到任何内容，回退到普通模式
+          if (!hasReceivedChunk) {
+            console.log('[TextNode] 流式输出失败，回退到普通模式')
+            fallbackToNormalMode()
+          } else {
+            canvasStore.updateNodeData(props.id, {
+              status: 'error',
+              error: error.message || 'LLM 对话失败'
+            })
+            alert(error.message || 'LLM 对话失败，请重试')
+            isGenerating.value = false
+          }
+        }
+      })
+      
+      // 如果没有接收到任何数据块，可能是后端不支持流式，回退到普通模式
+      if (!hasReceivedChunk) {
+        console.log('[TextNode] 未接收到流式数据，回退到普通模式')
+        await fallbackToNormalMode()
+      }
+    } catch (streamError) {
+      console.error('[TextNode] 流式调用异常，回退到普通模式:', streamError)
+      await fallbackToNormalMode()
+    }
     
-    // 刷新用户积分
-    window.dispatchEvent(new CustomEvent('user-info-updated'))
+    // 普通模式回退函数
+    async function fallbackToNormalMode() {
+      try {
+        const result = await chatWithLLM({
+          messages,
+          model: selectedModel.value,
+          preset: selectedPreset.value || undefined,
+          language: selectedLanguage.value || 'zh',
+          images: processedImages.length > 0 ? processedImages : undefined
+        })
+        
+        canvasStore.updateNodeData(props.id, {
+          status: 'success',
+          output: {
+            type: 'text',
+            content: result.result
+          },
+          llmResponse: result.result
+        })
+        
+        window.dispatchEvent(new CustomEvent('user-info-updated'))
+      } catch (fallbackError) {
+        console.error('[TextNode] 普通模式也失败:', fallbackError)
+        canvasStore.updateNodeData(props.id, {
+          status: 'error',
+          error: fallbackError.message || 'LLM 对话失败'
+        })
+        alert(fallbackError.message || 'LLM 对话失败，请重试')
+      } finally {
+        isGenerating.value = false
+      }
+    }
     
   } catch (error) {
     console.error('[TextNode] LLM 对话失败:', error)
@@ -335,7 +444,6 @@ async function handleLLMGenerate() {
       error: error.message || 'LLM 对话失败'
     })
     alert(error.message || 'LLM 对话失败，请重试')
-  } finally {
     isGenerating.value = false
   }
 }
@@ -402,6 +510,12 @@ function handleLLMKeyDown(event) {
 // 初始化加载 LLM 配置
 onMounted(() => {
   loadLLMConfig()
+  
+  // 如果节点数据中指定了预设，自动选择该预设
+  if (props.data.selectedPreset) {
+    selectedPreset.value = props.data.selectedPreset
+    console.log('[TextNode] 自动选择预设:', props.data.selectedPreset)
+  }
 })
 
 // 节点样式类
@@ -442,11 +556,61 @@ watch(() => [props.data.width, props.data.height], ([width, height]) => {
   if (height && height !== nodeHeight.value) nodeHeight.value = height
 }, { immediate: true })
 
+// 监听节点选中状态变化，取消选中时关闭所有下拉菜单
+watch(() => props.selected, (newSelected) => {
+  if (!newSelected) {
+    // 节点取消选中时，关闭所有下拉菜单
+    showModelDropdown.value = false
+    showPresetDropdown.value = false
+    showLanguageDropdown.value = false
+    showLeftMenu.value = false
+  }
+})
+
+// 同步 label 变化
+watch(() => props.data.label, (newLabel) => {
+  if (newLabel !== undefined && newLabel !== localLabel.value) {
+    localLabel.value = newLabel
+  }
+})
+
+// 双击标签进入编辑模式
+function handleLabelDoubleClick(event) {
+  event.stopPropagation()
+  isEditingLabel.value = true
+  nextTick(() => {
+    if (labelInputRef.value) {
+      labelInputRef.value.focus()
+      labelInputRef.value.select()
+    }
+  })
+}
+
+// 保存标签
+function saveLabelEdit() {
+  isEditingLabel.value = false
+  const newLabel = localLabel.value.trim() || 'Text'
+  localLabel.value = newLabel
+  canvasStore.updateNodeData(props.id, { label: newLabel })
+}
+
+// 标签输入框键盘事件
+function handleLabelKeyDown(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    saveLabelEdit()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    isEditingLabel.value = false
+    localLabel.value = props.data.label || 'Text'
+  }
+}
+
 // 快捷操作 - 点击后创建对应的新节点
 const quickActions = [
   { icon: '✎', label: '自己编写内容', action: () => handlePrepareEdit() },
-  { icon: '🎬', label: '文字生视频', action: () => createNextNode('video-gen', '视频生成') },
-  { icon: 'A+', label: '图片反推提示词', action: () => createNextNode('llm', '图片描述', 'llm-image-describe') },
+  { icon: '▶', label: '文字生视频', action: () => createNextNode('video-gen', '视频生成') },
+  { icon: 'A+', label: '图片反推提示词', action: () => handleImageDescribe() },
   { icon: '♪', label: '文字生音乐', action: () => createNextNode('audio-gen', '音频生成') }
 ]
 
@@ -470,8 +634,8 @@ function handlePrepareEdit() {
   canvasStore.selectNode(props.id)
 }
 
-// 进入编辑模式（双击）
-function handleEdit() {
+// 进入编辑模式（双击）- 支持回调函数
+function handleEdit(callback) {
   isEditing.value = true
   nodeState.value = 'editing'
   canvasStore.selectNode(props.id)
@@ -480,9 +644,23 @@ function handleEdit() {
   nextTick(() => {
     if (textareaRef.value) {
       textareaRef.value.focus()
-      // 如果有文本，设置innerHTML
-      if (localText.value) {
-        textareaRef.value.innerHTML = localText.value
+      // 优先使用当前显示的内容（LLM 输出或用户输入的文本）
+      // 如果有 LLM 响应，编辑 LLM 响应的内容
+      // 否则编辑 localText 的内容
+      const contentToEdit = props.data.llmResponse || localText.value
+      if (contentToEdit) {
+        textareaRef.value.innerHTML = contentToEdit
+        // 如果编辑的是 LLM 响应，同时更新 localText，以便保存编辑结果
+        if (props.data.llmResponse) {
+          localText.value = props.data.llmResponse
+        }
+      }
+      
+      // 如果有回调函数，等待DOM更新后执行
+      if (callback) {
+        nextTick(() => {
+          callback()
+        })
       }
     }
   })
@@ -501,6 +679,16 @@ function handleBlur() {
     nodeState.value = 'ready'
   }
   isEditing.value = false
+  
+  // 如果编辑的是 LLM 响应的内容，清除 LLM 响应，使用 localText 作为内容源
+  // 这样用户编辑后的内容会正确显示，避免 LLM 响应和编辑内容混淆
+  if (props.data.llmResponse && localText.value) {
+    canvasStore.updateNodeData(props.id, {
+      llmResponse: null,
+      text: localText.value
+    })
+  }
+  
   // 退出编辑模式后，重新显示底部 LLM 配置面板
   canvasStore.isBottomPanelVisible = true
 }
@@ -543,8 +731,85 @@ function createNextNode(nodeType, title, subType = null) {
   canvasStore.selectNode(newNodeId)
 }
 
-// 切换格式（粗体、斜体、下划线）
+// 处理"图片反推提示词"功能
+function handleImageDescribe() {
+  // 获取当前节点位置
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 在左侧创建图片节点
+  const imageNodePosition = {
+    x: currentNode.position.x - 350,
+    y: currentNode.position.y - 50
+  }
+  
+  const imageNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  
+  // 获取默认图片（网站 logo）
+  const defaultImage = '/logo.svg'
+  
+  canvasStore.addNode({
+    id: imageNodeId,
+    type: 'image-input',
+    position: imageNodePosition,
+    data: {
+      title: '参考图片',
+      sourceImages: [defaultImage], // 默认显示网站 logo
+      status: 'success' // 标记为已有图片
+    }
+  })
+  
+  // 连接图片节点到当前文本节点
+  canvasStore.addEdge({
+    source: imageNodeId,
+    target: props.id,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  // 切换当前文本节点的预设到"图片反推"
+  // 查找"图片反推"相关的预设
+  const imageDescribePreset = availablePresets.value.find(
+    p => p.id === 'image-describe' || p.name?.includes('图片') || p.name?.includes('反推')
+  )
+  
+  if (imageDescribePreset) {
+    selectedPreset.value = imageDescribePreset.id
+  }
+  
+  // 设置提示文本
+  llmInputText.value = '请详细描述这张图片的内容'
+  
+  // 切换到准备状态
+  nodeState.value = 'ready'
+  
+  // 选中当前文本节点（保持焦点在文本节点上）
+  canvasStore.selectNode(props.id)
+  
+  // 自动聚焦输入框
+  nextTick(() => {
+    if (llmInputRef.value) {
+      llmInputRef.value.focus()
+    }
+  })
+}
+
+// 切换格式（粗体、斜体、下划线）- 优化版
 function toggleFormat(format) {
+  // 如果不在编辑模式，先进入编辑模式
+  if (!isEditing.value) {
+    handleEdit(() => {
+      // 编辑器准备好后，应用格式到全部内容
+      applyFormat(format)
+    })
+    return
+  }
+  
+  applyFormat(format)
+}
+
+// 应用格式的实际逻辑
+function applyFormat(format) {
   if (!textareaRef.value) return
   
   // 阻止失焦
@@ -552,14 +817,16 @@ function toggleFormat(format) {
   
   // 保存当前选区
   const selection = window.getSelection()
-  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+  if (!selection || selection.rangeCount === 0) return
   
-  // 如果没有选中文字，或选区为空，则选中所有内容
-  if (!range || range.collapsed) {
-    const newRange = document.createRange()
-    newRange.selectNodeContents(textareaRef.value)
+  const range = selection.getRangeAt(0)
+  const wasCollapsed = range.collapsed // 记录是否没有选中文字
+  
+  // 如果没有选中文字，作用于所有内容
+  if (wasCollapsed) {
+    range.selectNodeContents(textareaRef.value)
     selection.removeAllRanges()
-    selection.addRange(newRange)
+    selection.addRange(range)
   }
   
   // 使用 document.execCommand 实时应用格式
@@ -567,23 +834,34 @@ function toggleFormat(format) {
   
   formatState.value[format] = !formatState.value[format]
   
-  // 恢复焦点到编辑器
-  nextTick(() => {
-    if (textareaRef.value) {
-      textareaRef.value.focus()
-      // 光标移到末尾
-      const sel = window.getSelection()
-      sel.removeAllRanges()
-      const newRange = document.createRange()
-      newRange.selectNodeContents(textareaRef.value)
-      newRange.collapse(false)
-      sel.addRange(newRange)
-    }
-  })
+  // 如果原本没有选中（我们刚才自动全选的），取消选中状态
+  if (wasCollapsed) {
+    range.collapse(false) // 光标移到末尾
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  // 如果原本有选中，execCommand 会自动保持选中状态
+  
+  // 直接保持焦点，不使用nextTick
+  textareaRef.value.focus()
 }
 
-// 设置字体大小
+// 设置字体大小（极致优化版：直接修改样式，避免DOM重建）
 function setFontSize(size) {
+  // 如果不在编辑模式，先进入编辑模式
+  if (!isEditing.value) {
+    handleEdit(() => {
+      // 编辑器准备好后，应用字体大小到全部内容
+      applyFontSize(size)
+    })
+    return
+  }
+  
+  applyFontSize(size)
+}
+
+// 应用字体大小的实际逻辑
+function applyFontSize(size) {
   if (!textareaRef.value) return
   
   event?.preventDefault()
@@ -591,72 +869,98 @@ function setFontSize(size) {
   formatState.value.fontSize = size
   const selection = window.getSelection()
   
-  // 如果没有选中文字，或选区为空，则选中所有内容
-  if (selection.rangeCount === 0 || selection.getRangeAt(0).collapsed) {
+  // 如果没有 selection 或没有 rangeCount，先创建选区
+  if (!selection || selection.rangeCount === 0) {
+    // 自动全选所有内容
     const range = document.createRange()
     range.selectNodeContents(textareaRef.value)
     selection.removeAllRanges()
     selection.addRange(range)
   }
   
-  // 对选中的内容设置字体大小
-  if (selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0)
-    
-    // 获取选中的内容
-    const fragment = range.extractContents()
-    
-    // 遍历所有节点并设置字体大小
-    const walker = document.createTreeWalker(
-      fragment,
-      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-      null
-    )
-    
-    const span = document.createElement('span')
-    span.style.fontSize = `${size}px`
-    span.appendChild(fragment)
-    
-    range.insertNode(span)
+  const range = selection.getRangeAt(0)
+  const wasCollapsed = range.collapsed
+  
+  // 如果没有选中文字（光标在编辑器中），自动全选所有内容
+  if (wasCollapsed) {
+    const newRange = document.createRange()
+    newRange.selectNodeContents(textareaRef.value)
+    selection.removeAllRanges()
+    selection.addRange(newRange)
   }
   
-  // 恢复焦点并移到末尾
-  nextTick(() => {
-    if (textareaRef.value) {
-      textareaRef.value.focus()
-      const sel = window.getSelection()
-      sel.removeAllRanges()
-      const newRange = document.createRange()
-      newRange.selectNodeContents(textareaRef.value)
-      newRange.collapse(false)
-      sel.addRange(newRange)
+  // 获取当前选区（现在肯定有选中的内容了）
+  const currentRange = selection.getRangeAt(0)
+  
+  // 提取选中的内容
+  const fragment = currentRange.extractContents()
+  
+  // 创建一个包装容器来应用字体大小
+  const span = document.createElement('span')
+  span.style.fontSize = `${size}px`
+  
+  // 清除内部所有元素的字号样式，确保新字号生效
+  const clearInlineFontSize = (node) => {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.style && node.style.fontSize) {
+        node.style.fontSize = ''
+      }
+      Array.from(node.childNodes).forEach(clearInlineFontSize)
     }
-  })
+  }
+  clearInlineFontSize(fragment)
+  
+  span.appendChild(fragment)
+  currentRange.insertNode(span)
+  
+  // 移动光标到内容末尾
+  currentRange.setStartAfter(span)
+  currentRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(currentRange)
+  
+  // 更新本地文本
+  localText.value = textareaRef.value.innerHTML
+  
+  // 保持焦点
+  textareaRef.value.focus()
 }
 
 function copyText() {
   event?.preventDefault()
-  const text = textareaRef.value?.innerText || localText.value
+  // 复制功能在非编辑模式下也可以工作
+  const text = textareaRef.value?.innerText || localText.value || props.data.llmResponse || ''
   navigator.clipboard.writeText(text)
   
-  // 恢复焦点
-  nextTick(() => {
+  // 如果在编辑模式，恢复焦点
+  if (isEditing.value) {
     textareaRef.value?.focus()
-  })
+  }
 }
 
 function toggleFullscreen() {
   event?.preventDefault()
+  
+  // 如果不在编辑模式，先进入编辑模式
+  if (!isEditing.value) {
+    handleEdit()
+  }
+  
   // TODO: 实现全屏功能
   
-  // 恢复焦点
-  nextTick(() => {
+  // 如果在编辑模式，恢复焦点
+  if (isEditing.value) {
     textareaRef.value?.focus()
-  })
+  }
 }
 
 // 打开右键菜单
 function handleContextMenu(event) {
+  // 如果在编辑模式且右键点击的是编辑器，显示浏览器原生右键菜单（支持复制粘贴）
+  if (isEditing.value && textareaRef.value?.contains(event.target)) {
+    return // 不阻止默认行为，显示浏览器原生菜单
+  }
+  
   event.preventDefault()
   canvasStore.openContextMenu(
     { x: event.clientX, y: event.clientY },
@@ -670,15 +974,84 @@ let pressTimer = null
 let isLongPress = false
 let pressStartPos = { x: 0, y: 0 }
 
-// 左侧添加按钮 - 单击
+// 左侧快捷操作菜单显示状态
+const showLeftMenu = ref(false)
+
+// 左侧快捷操作列表（添加上游输入）
+const leftQuickActions = [
+  { icon: '✨', label: '提示词润色', action: () => createUpstreamNode('text-input', '提示词润色', 'prompt-enhance') },
+  { icon: 'A+', label: '图片反推', action: () => createUpstreamNode('image-input', '图片反推') },
+  { icon: '🎬', label: '视频反推', action: () => createUpstreamNode('video-input', '视频反推') },
+  { icon: '🎵', label: '音频提取文字', action: () => createUpstreamNode('audio-input', '音频提取文字') },
+  { icon: '📹', label: '视频提取文字', action: () => createUpstreamNode('video-text-extract', '视频提取文字') }
+]
+
+// 左侧添加按钮 - 单击显示快捷菜单
 function handleAddLeftClick(event) {
   event.stopPropagation()
-  const rect = event.target.getBoundingClientRect()
-  canvasStore.openNodeSelector(
-    { x: rect.left - 20, y: rect.top },
-    'node-left',
-    props.id
-  )
+  showLeftMenu.value = !showLeftMenu.value
+}
+
+// 监听点击外部关闭左侧菜单
+watch(showLeftMenu, (newValue) => {
+  if (newValue) {
+    // 延迟添加监听器，避免立即触发
+    setTimeout(() => {
+      document.addEventListener('click', closeLeftMenu)
+    }, 100)
+  } else {
+    document.removeEventListener('click', closeLeftMenu)
+  }
+})
+
+// 关闭左侧菜单
+function closeLeftMenu() {
+  showLeftMenu.value = false
+}
+
+// 创建上游节点（连接到当前节点的左侧）
+function createUpstreamNode(nodeType, title, preset = null) {
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 在左侧创建新节点
+  const newNodePosition = {
+    x: currentNode.position.x - 450,
+    y: currentNode.position.y
+  }
+  
+  // 创建节点数据
+  const nodeData = { title }
+  if (preset) {
+    nodeData.selectedPreset = preset
+  }
+  
+  // 创建新节点
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  canvasStore.addNode({
+    id: newNodeId,
+    type: nodeType,
+    position: newNodePosition,
+    data: nodeData
+  })
+  
+  // 创建连接：新节点 → 当前节点
+  canvasStore.addEdge({
+    id: `edge_${newNodeId}_${props.id}`,
+    source: newNodeId,
+    target: props.id
+  })
+  
+  // 更新当前节点状态
+  canvasStore.updateNodeData(props.id, {
+    hasUpstream: true,
+    inheritedFrom: newNodeId
+  })
+  
+  // 关闭菜单
+  showLeftMenu.value = false
+  
+  console.log('[TextNode] 创建上游节点:', { nodeType, title, preset, newNodeId })
 }
 
 // 右侧添加按钮 - 鼠标按下（开始检测长按）
@@ -802,6 +1175,11 @@ function createImageGenNode() {
 
 // 点击节点时选中，并显示底部 LLM 配置面板
 function handleNodeClick(e) {
+  // 如果点击的是编辑器区域，不阻止事件，让编辑器正常工作
+  if (isEditing.value && textareaRef.value?.contains(e.target)) {
+    return // 让编辑器自己处理点击事件
+  }
+  
   e.stopPropagation()
   canvasStore.selectNode(props.id)
   // 显示底部配置面板（用于 LLM 对话）
@@ -810,6 +1188,11 @@ function handleNodeClick(e) {
 
 // 双击进入编辑模式
 function handleDoubleClick(e) {
+  // 如果已经在编辑模式且点击的是编辑器，不处理（让编辑器自己处理双击选词）
+  if (isEditing.value && textareaRef.value?.contains(e.target)) {
+    return
+  }
+  
   e.stopPropagation()
   // 任何状态下双击都进入编辑模式
   handleEdit()
@@ -876,8 +1259,8 @@ function handleResizeEnd() {
       class="node-handle node-handle-hidden"
     />
     
-    <!-- 格式工具栏（仅编辑模式显示） -->
-    <div v-if="isEditing" class="format-toolbar">
+    <!-- 格式工具栏（选中节点时显示） -->
+    <div v-if="selected" class="format-toolbar">
       <template v-for="(btn, index) in formatButtons" :key="index">
         <div v-if="btn.type === 'divider'" class="toolbar-divider"></div>
         <button 
@@ -894,21 +1277,90 @@ function handleResizeEnd() {
     </div>
     
     <!-- 节点头部标题 -->
-    <div class="text-node-label">Text</div>
+    <div 
+      v-if="!isEditingLabel" 
+      class="text-node-label"
+      @dblclick="handleLabelDoubleClick"
+      :title="'双击重命名'"
+    >
+      {{ localLabel }}
+    </div>
+    <input
+      v-else
+      ref="labelInputRef"
+      v-model="localLabel"
+      type="text"
+      class="text-node-label-input"
+      @blur="saveLabelEdit"
+      @keydown="handleLabelKeyDown"
+      @click.stop
+      @mousedown.stop
+    />
     
     <!-- 节点主体卡片容器 -->
     <div class="text-node-card-wrapper">
       <!-- 左侧添加按钮 -->
       <button 
         class="node-add-btn node-add-btn-left"
-        title="添加上游节点"
+        title="添加上游输入"
         @click="handleAddLeftClick"
       >
         +
       </button>
       
+      <!-- 左侧快捷操作菜单 -->
+      <div v-if="showLeftMenu" class="left-quick-menu" @click.stop>
+        <div 
+          v-for="(action, index) in leftQuickActions" 
+          :key="index"
+          class="left-quick-menu-item"
+          @click="action.action"
+        >
+          <span class="left-menu-icon">{{ action.icon }}</span>
+          <span class="left-menu-label">{{ action.label }}</span>
+        </div>
+      </div>
+      
       <!-- 节点主体卡片 -->
-      <div class="text-node-card" :style="cardStyle" @dblclick="handleDoubleClick">
+      <div class="text-node-card" :class="{ 'is-processing': isGenerating || props.data.status === 'processing' }" :style="cardStyle" @dblclick="handleDoubleClick">
+        <!-- 彗星环绕发光特效（生成中显示） -->
+        <svg v-if="isGenerating || props.data.status === 'processing'" class="comet-border" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <!-- 彗星渐变 -->
+            <linearGradient id="text-comet-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="transparent" />
+              <stop offset="70%" stop-color="rgba(74, 222, 128, 0.3)" />
+              <stop offset="90%" stop-color="rgba(74, 222, 128, 0.8)" />
+              <stop offset="100%" stop-color="#4ade80" />
+            </linearGradient>
+            <!-- 发光滤镜 -->
+            <filter id="text-comet-glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- 底层发光边框 -->
+          <rect 
+            x="1" y="1" width="98" height="98" rx="8" ry="8"
+            fill="none" 
+            stroke="rgba(74, 222, 128, 0.15)" 
+            stroke-width="1"
+          />
+          <!-- 彗星轨迹 -->
+          <rect 
+            class="comet-path"
+            x="1" y="1" width="98" height="98" rx="8" ry="8"
+            fill="none" 
+            stroke="url(#text-comet-gradient)" 
+            stroke-width="2"
+            stroke-linecap="round"
+            filter="url(#text-comet-glow)"
+          />
+        </svg>
+        
         <!-- 编辑模式：可编辑的富文本区域 -->
         <div 
           v-if="isEditing" 
@@ -918,51 +1370,61 @@ function handleResizeEnd() {
           placeholder="请输入文本内容..."
           @blur="handleBlur"
           @input="handleInput"
+          @mousedown.stop
+          @mousemove.stop
+          @mouseup.stop
+          @click.stop
+          @dblclick.stop
         ></div>
         
-        <!-- 加载中状态 -->
-        <div v-else-if="isGenerating || props.data.status === 'processing'" class="text-node-loading">
-          <div class="loading-spinner">⏳</div>
-          <div class="loading-text">正在生成...</div>
-        </div>
-        
-        <!-- 错误状态 -->
-        <div v-else-if="props.data.status === 'error'" class="text-node-error">
-          <div class="error-icon">⚠️</div>
-          <div class="error-text">{{ props.data.error || '生成失败' }}</div>
-          <button class="retry-btn" @click.stop="handleLLMGenerate">重试</button>
-        </div>
-        
-        <!-- LLM 响应显示（优先级最高） -->
-        <div v-else-if="props.data.llmResponse" class="text-node-llm-response">
-          <div class="llm-response-content">{{ props.data.llmResponse }}</div>
-        </div>
-        
-        <!-- 有内容且非编辑模式：显示文本内容 -->
-        <div 
-          v-else-if="localText" 
-          class="text-node-display"
-          v-html="localText"
-        ></div>
-        
-        <!-- 待编辑状态（无内容）：显示双击提示 -->
-        <div v-else-if="nodeState === 'ready'" class="text-node-ready">
+        <!-- 非编辑模式下显示内容 -->
+        <template v-else>
+          <!-- 错误状态 -->
+          <div v-if="props.data.status === 'error'" class="text-node-error">
+            <div class="error-icon">⚠️</div>
+            <div class="error-text">{{ props.data.error || '生成失败' }}</div>
+            <button class="retry-btn" @click.stop="handleLLMGenerate">重试</button>
+          </div>
+          
+          <!-- LLM 响应显示（生成中或已完成） -->
+          <div v-else-if="props.data.llmResponse" class="text-node-llm-response" :class="{ 'is-streaming': isGenerating || props.data.status === 'processing' }">
+            <div class="llm-response-content">
+              {{ props.data.llmResponse }}
+              <span v-if="isGenerating || props.data.status === 'processing'" class="streaming-cursor">▊</span>
+            </div>
+          </div>
+          
+          <!-- 加载中状态（还没有任何内容时） -->
+          <div v-else-if="isGenerating || props.data.status === 'processing'" class="text-node-loading">
+            <span class="processing-text">正在生成...</span>
+          </div>
+          
+          <!-- 有内容且非编辑模式：显示文本内容 -->
+          <div 
+            v-else-if="localText" 
+            class="text-node-display"
+            v-html="localText"
+          ></div>
+          
+          <!-- 待编辑状态（无内容）：显示双击提示 -->
+          <div v-else-if="nodeState === 'ready'" class="text-node-ready">
           <div class="ready-hint">双击开始编辑...</div>
         </div>
         
-        <!-- 空状态：显示快捷操作 -->
-        <div v-else class="text-node-empty">
-          <div class="text-node-hint">尝试：</div>
-          <div 
-            v-for="action in quickActions"
-            :key="action.label"
-            class="text-node-action"
-            @click.stop="action.action"
-          >
-            <span class="action-icon">{{ action.icon }}</span>
-            <span class="action-label">{{ action.label }}</span>
+          <!-- 空状态：显示快捷操作 -->
+          <div v-else class="text-node-empty">
+            <div class="text-node-hint">尝试：</div>
+            <div 
+              v-for="action in quickActions"
+              :key="action.label"
+              class="text-node-action"
+              @click.stop="action.action"
+            >
+              <span class="action-icon">{{ action.icon }}</span>
+              <span class="action-label">{{ action.label }}</span>
+            </div>
           </div>
-        </div>
+        </template>
         
         <!-- Resize Handles 调节手柄 -->
         <div 
@@ -1040,6 +1502,28 @@ function handleResizeEnd() {
       <!-- 控制栏 -->
       <div class="llm-controls">
         <div class="controls-left">
+          <!-- 模型选择器 -->
+          <div class="model-selector" @click="toggleModelDropdown">
+            <span class="model-icon llm-icon">{{ selectedModelIcon }}</span>
+            <span class="model-name">{{ selectedModelLabel }}</span>
+            <span class="dropdown-arrow">▾</span>
+            
+            <!-- 下拉菜单 -->
+            <div v-if="showModelDropdown" class="model-dropdown" @click.stop>
+              <div 
+                v-for="model in availableModels" 
+                :key="model.value"
+                class="model-option"
+                :class="{ active: selectedModel === model.value }"
+                @click.stop="selectModel(model.value)"
+              >
+                <span class="model-option-icon llm-icon">{{ model.icon }}</span>
+                <span class="model-option-name">{{ model.label }}</span>
+                <span v-if="model.pointsCost" class="model-option-cost">💎{{ model.pointsCost }}</span>
+              </div>
+            </div>
+          </div>
+          
           <!-- 功能预设选择器 -->
           <div class="preset-selector" @click="togglePresetDropdown">
             <span class="preset-name">{{ selectedPresetLabel }}</span>
@@ -1081,28 +1565,6 @@ function handleResizeEnd() {
                 @click.stop="selectLanguage(language.code)"
               >
                 <span class="language-option-name">{{ language.name }}</span>
-              </div>
-            </div>
-          </div>
-          
-          <!-- 模型选择器 -->
-          <div class="model-selector" @click="toggleModelDropdown">
-            <span class="model-icon llm-icon">{{ selectedModelIcon }}</span>
-            <span class="model-name">{{ selectedModelLabel }}</span>
-            <span class="dropdown-arrow">▾</span>
-            
-            <!-- 下拉菜单 -->
-            <div v-if="showModelDropdown" class="model-dropdown" @click.stop>
-              <div 
-                v-for="model in availableModels" 
-                :key="model.value"
-                class="model-option"
-                :class="{ active: selectedModel === model.value }"
-                @click.stop="selectModel(model.value)"
-              >
-                <span class="model-option-icon llm-icon">{{ model.icon }}</span>
-                <span class="model-option-name">{{ model.label }}</span>
-                <span v-if="model.pointsCost" class="model-option-cost">💎{{ model.pointsCost }}</span>
               </div>
             </div>
           </div>
@@ -1188,6 +1650,32 @@ function handleResizeEnd() {
   font-weight: 500;
   margin-bottom: 8px;
   text-align: center;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.text-node-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--canvas-text-primary, #ffffff);
+}
+
+/* 标签编辑输入框 */
+.text-node-label-input {
+  color: var(--canvas-text-primary, #ffffff);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  text-align: center;
+  background: var(--canvas-bg-tertiary, #1a1a1a);
+  border: 1px solid var(--canvas-accent-primary, #3b82f6);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 60px;
+  max-width: 200px;
 }
 
 /* 卡片容器 - 用于定位加号按钮 */
@@ -1215,6 +1703,7 @@ function handleResizeEnd() {
 
 .text-node.editing .text-node-card {
   /* 编辑模式下保持用户设置的尺寸 */
+  /* 注意：编辑器内的鼠标事件已通过 @mousedown.stop 阻止冒泡，不会触发节点拖拽 */
 }
 
 .text-node-card:hover {
@@ -1229,6 +1718,41 @@ function handleResizeEnd() {
 .text-node.resizing .text-node-card {
   pointer-events: none;
   user-select: none;
+}
+
+/* ========== 彗星环绕发光特效（生成中） ========== */
+.text-node-card.is-processing {
+  position: relative;
+  overflow: visible;
+  box-shadow: 
+    0 0 10px rgba(74, 222, 128, 0.2),
+    0 0 20px rgba(74, 222, 128, 0.1),
+    inset 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
+.comet-border {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 18px;
+}
+
+.comet-path {
+  stroke-dasharray: 25 75;
+  stroke-dashoffset: 0;
+  animation: comet-rotate 2.5s linear infinite;
+}
+
+@keyframes comet-rotate {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
 }
 
 /* Resize Handles 调节手柄 */
@@ -1295,6 +1819,11 @@ function handleResizeEnd() {
   padding: 20px;
   font-family: inherit;
   overflow-y: auto;
+  user-select: text;
+  cursor: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
 }
 
 .editor-content:empty:before {
@@ -1327,7 +1856,8 @@ function handleResizeEnd() {
   color: var(--canvas-text-primary, #ffffff);
   font-size: 14px;
   line-height: 1.6;
-  max-height: 300px;
+  flex: 1;
+  height: 100%;
   overflow-y: auto;
   word-break: break-word;
   padding: 20px;
@@ -1376,41 +1906,81 @@ function handleResizeEnd() {
 .llm-response-content {
   flex: 1;
   color: var(--canvas-text-primary, #ffffff);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 15px;
+  line-height: 1.8;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+.text-node-llm-response.is-streaming .llm-response-content {
+  animation: fadeIn 0.3s ease-in;
+}
+
 /* 加载中状态 */
+.text-node-streaming {
+  padding: 20px;
+  flex: 1;
+  height: 100%;
+}
+
 .text-node-loading {
   padding: 60px 20px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
+  flex: 1;
+  height: 100%;
+}
+
+.processing-text {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--canvas-text-secondary, #888);
+  letter-spacing: 2px;
+}
+
+/* LLM 响应内容 */
+.text-node-llm-response {
+  padding: 20px;
   min-height: 200px;
 }
 
-.loading-spinner {
-  font-size: 32px;
-  animation: spin 1s linear infinite;
+.llm-response-content {
+  color: var(--canvas-text-primary, #ffffff);
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-@keyframes spin {
+.text-node-llm-response.is-streaming .llm-response-content {
+  animation: fadeIn 0.3s ease-in;
+}
+
+.streaming-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--canvas-accent-success, #4ade80);
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+@keyframes fadeIn {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
   }
-}
-
-.loading-text {
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 14px;
 }
 
 /* 错误状态 */
@@ -1421,7 +1991,8 @@ function handleResizeEnd() {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  min-height: 200px;
+  flex: 1;
+  height: 100%;
 }
 
 .error-icon {
@@ -1458,7 +2029,8 @@ function handleResizeEnd() {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 200px;
+  flex: 1;
+  height: 100%;
 }
 
 .ready-hint {
@@ -1482,6 +2054,10 @@ function handleResizeEnd() {
 /* 空状态提示 */
 .text-node-empty {
   padding: 20px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .text-node-hint {
@@ -1575,6 +2151,62 @@ function handleResizeEnd() {
 
 .node-add-btn-right {
   right: -12px;
+}
+
+/* ========== 左侧快捷操作菜单 ========== */
+.left-quick-menu {
+  position: absolute;
+  left: -220px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--canvas-bg-secondary, #1a1a1a);
+  border: 1px solid var(--canvas-border-subtle, #2a2a2a);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 200px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  animation: slideInLeft 0.2s ease;
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+.left-quick-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--canvas-text-secondary, #ccc);
+}
+
+.left-quick-menu-item:hover {
+  background: var(--canvas-bg-tertiary, #2a2a2a);
+  color: var(--canvas-text-primary, #fff);
+}
+
+.left-menu-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.left-menu-label {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* ========== LLM 配置面板样式 ========== */

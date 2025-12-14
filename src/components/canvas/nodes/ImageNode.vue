@@ -26,6 +26,11 @@ const fileInputRef = ref(null)
 const refImageInputRef = ref(null) // 参考图片上传引用
 const pendingAction = ref(null) // 记录待执行的操作类型
 
+// 标签编辑状态
+const isEditingLabel = ref(false)
+const labelInputRef = ref(null)
+const localLabel = ref(props.data.label || 'Image')
+
 // 本地状态
 const isGenerating = ref(false)
 const errorMessage = ref('')
@@ -148,8 +153,11 @@ const isSourceNode = computed(() => {
 })
 
 // 判断是否有上游连接（用于显示输出状态而非快捷操作）
+// 动态检查是否真的有上游连接边，而不是依赖存储的状态
 const hasUpstream = computed(() => {
-  return props.data.hasUpstream || props.data.inheritedFrom || props.data.inheritedData
+  // 检查是否有连接到当前节点的边
+  const hasIncomingEdge = canvasStore.edges.some(edge => edge.target === props.id)
+  return hasIncomingEdge
 })
 
 // 继承的提示词（来自文本节点）
@@ -270,6 +278,45 @@ watch([selectedModel, selectedResolution, selectedAspectRatio, selectedCount, pr
     })
   }
 )
+
+// 同步 label 变化
+watch(() => props.data.label, (newLabel) => {
+  if (newLabel !== undefined && newLabel !== localLabel.value) {
+    localLabel.value = newLabel
+  }
+})
+
+// 双击标签进入编辑模式
+function handleLabelDoubleClick(event) {
+  event.stopPropagation()
+  isEditingLabel.value = true
+  nextTick(() => {
+    if (labelInputRef.value) {
+      labelInputRef.value.focus()
+      labelInputRef.value.select()
+    }
+  })
+}
+
+// 保存标签
+function saveLabelEdit() {
+  isEditingLabel.value = false
+  const newLabel = localLabel.value.trim() || 'Image'
+  localLabel.value = newLabel
+  canvasStore.updateNodeData(props.id, { label: newLabel })
+}
+
+// 标签输入框键盘事件
+function handleLabelKeyDown(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    saveLabelEdit()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    isEditingLabel.value = false
+    localLabel.value = props.data.label || 'Image'
+  }
+}
 
 // 触发文件上传
 function triggerUpload(actionType) {
@@ -478,28 +525,42 @@ async function updateSourceImage(event) {
   }
 }
 
-// 获取上游节点的最新数据
-function getUpstreamPrompt() {
-  // 1. 先检查是否有上游节点
-  const upstreamEdge = canvasStore.edges.find(e => e.target === props.id)
-  if (!upstreamEdge) return ''
+// 获取上游节点的所有提示词（支持多个文本节点连接）
+function getUpstreamPrompts() {
+  const prompts = []
   
-  // 2. 获取上游节点的最新数据
-  const sourceNode = canvasStore.nodes.find(n => n.id === upstreamEdge.source)
-  if (!sourceNode) return ''
+  // 查找所有连接到当前节点的上游边
+  const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
+  if (upstreamEdges.length === 0) return prompts
   
-  // 3. 根据节点类型获取内容
-  if (sourceNode.type === 'text-input' || sourceNode.type === 'text') {
-    // 文本节点：优先获取 LLM 响应，其次是手写文本
-    const content = sourceNode.data?.llmResponse || sourceNode.data?.text || ''
-    // 去除 HTML 标签，只保留纯文本
-    const tempDiv = document.createElement('div')
-    tempDiv.innerHTML = content
-    return tempDiv.textContent || tempDiv.innerText || ''
+  // 遍历所有上游节点，收集文本内容
+  for (const edge of upstreamEdges) {
+    const sourceNode = canvasStore.nodes.find(n => n.id === edge.source)
+    if (!sourceNode) continue
+    
+    // 只处理文本节点
+    if (sourceNode.type === 'text-input' || sourceNode.type === 'text') {
+      // 文本节点：优先获取 LLM 响应，其次是手写文本
+      const content = sourceNode.data?.llmResponse || sourceNode.data?.text || ''
+      if (content) {
+        // 去除 HTML 标签，只保留纯文本
+        const tempDiv = document.createElement('div')
+        tempDiv.innerHTML = content
+        const cleanText = (tempDiv.textContent || tempDiv.innerText || '').trim()
+        if (cleanText) {
+          prompts.push(cleanText)
+        }
+      }
+    }
   }
   
-  // 4. 其他类型节点：返回已继承的数据
-  return inheritedPrompt.value
+  return prompts
+}
+
+// 获取上游节点的最新数据（保留兼容性）
+function getUpstreamPrompt() {
+  const prompts = getUpstreamPrompts()
+  return prompts.length > 0 ? prompts.join('\n') : ''
 }
 
 // 并发间隔时间（毫秒）
@@ -760,14 +821,21 @@ function createNewOutputNode() {
 
 // 开始生成（输出节点用）
 async function handleGenerate() {
-  // 动态获取上游节点的最新提示词
+  // 动态获取上游节点的最新提示词（可能有多个文本节点连接）
   const upstreamPrompt = getUpstreamPrompt()
+  const userPrompt = promptText.value.trim()
   
-  // 使用用户输入的提示词，或者上游节点的提示词
-  const finalPrompt = promptText.value.trim() || upstreamPrompt
+  // 拼接提示词：上游提示词 + 用户输入的提示词
+  // 如果两者都有，用换行符连接；否则使用其中一个
+  let finalPrompt = ''
+  if (upstreamPrompt && userPrompt) {
+    finalPrompt = `${upstreamPrompt}\n${userPrompt}`
+  } else {
+    finalPrompt = upstreamPrompt || userPrompt
+  }
   
   console.log('[ImageNode] 生成参数:', { 
-    userPrompt: promptText.value.trim(), 
+    userPrompt, 
     upstreamPrompt,
     finalPrompt,
     model: selectedModel.value,
@@ -1042,14 +1110,78 @@ function handleContextMenu(event) {
   )
 }
 
+// 左侧快捷操作菜单显示状态
+const showLeftMenu = ref(false)
+
+// 左侧快捷操作列表（图片节点的上游输入）
+const leftQuickActions = [
+  { icon: '✍️', label: '提示词', action: () => createUpstreamNode('text-input', '提示词') },
+  { icon: '🖼️', label: '参考图', action: () => createUpstreamNode('image-input', '参考图') }
+]
+
 // 添加按钮交互
 function handleAddLeftClick(event) {
   event.stopPropagation()
-  canvasStore.openNodeSelector(
-    { x: event.clientX, y: event.clientY },
-    'node-left',
-    props.id
-  )
+  showLeftMenu.value = !showLeftMenu.value
+}
+
+// 创建上游节点（连接到当前节点的左侧）
+function createUpstreamNode(nodeType, title) {
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 在左侧创建新节点
+  const newNodePosition = {
+    x: currentNode.position.x - 450,
+    y: currentNode.position.y
+  }
+  
+  // 创建节点数据
+  const nodeData = { title }
+  
+  // 创建新节点
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  canvasStore.addNode({
+    id: newNodeId,
+    type: nodeType,
+    position: newNodePosition,
+    data: nodeData
+  })
+  
+  // 创建连接：新节点 → 当前节点
+  canvasStore.addEdge({
+    id: `edge_${newNodeId}_${props.id}`,
+    source: newNodeId,
+    target: props.id
+  })
+  
+  // 更新当前节点状态
+  canvasStore.updateNodeData(props.id, {
+    hasUpstream: true,
+    inheritedFrom: newNodeId
+  })
+  
+  // 关闭菜单
+  showLeftMenu.value = false
+  
+  console.log('[ImageNode] 创建上游节点:', { nodeType, title, newNodeId })
+}
+
+// 监听点击外部关闭左侧菜单
+watch(showLeftMenu, (newValue) => {
+  if (newValue) {
+    // 延迟添加监听器，避免立即触发
+    setTimeout(() => {
+      document.addEventListener('click', closeLeftMenu)
+    }, 100)
+  } else {
+    document.removeEventListener('click', closeLeftMenu)
+  }
+})
+
+// 关闭左侧菜单
+function closeLeftMenu() {
+  showLeftMenu.value = false
 }
 
 // ========== 右侧添加按钮交互（单击/长按拖拽） ==========
@@ -1184,9 +1316,10 @@ function createUpstreamImageNode(imageUrl) {
     y: currentNode.position.y + offsetY - 100
   }
   
+  // 使用 image-input 类型，与拖拽上传和文件选择器保持一致
   canvasStore.addNode({
     id: newNodeId,
-    type: 'image',
+    type: 'image-input',
     position: newNodePosition,
     data: {
       title: `参考图 ${existingUpstreamCount + 1}`,
@@ -1453,18 +1586,49 @@ async function handleDrop(event) {
     />
     
     <!-- 节点标签 -->
-    <div class="node-label">Image</div>
+    <div 
+      v-if="!isEditingLabel" 
+      class="node-label"
+      @dblclick="handleLabelDoubleClick"
+      :title="'双击重命名'"
+    >
+      {{ localLabel }}
+    </div>
+    <input
+      v-else
+      ref="labelInputRef"
+      v-model="localLabel"
+      type="text"
+      class="node-label-input"
+      @blur="saveLabelEdit"
+      @keydown="handleLabelKeyDown"
+      @click.stop
+      @mousedown.stop
+    />
     
     <!-- 节点主体 -->
     <div class="node-wrapper">
       <!-- 左侧添加按钮 -->
       <button 
         class="node-add-btn node-add-btn-left"
-        title="添加参考图片输入"
+        title="添加上游输入"
         @click="handleAddLeftClick"
       >
         +
       </button>
+      
+      <!-- 左侧快捷操作菜单 -->
+      <div v-if="showLeftMenu" class="left-quick-menu" @click.stop>
+        <div 
+          v-for="(action, index) in leftQuickActions" 
+          :key="index"
+          class="left-quick-menu-item"
+          @click="action.action"
+        >
+          <span class="left-menu-icon">{{ action.icon }}</span>
+          <span class="left-menu-label">{{ action.label }}</span>
+        </div>
+      </div>
       
       <!-- 节点卡片 -->
       <div 
@@ -1572,7 +1736,14 @@ async function handleDrop(event) {
             
             <!-- 有上游连接时 - 显示等待状态 -->
             <div v-else-if="hasUpstream" class="ready-state">
-              <div class="ready-icon">🖼️</div>
+              <div class="ready-icon">
+                <!-- SVG 黑白图标 -->
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <circle cx="8.5" cy="10" r="1.5" fill="currentColor"/>
+                  <path d="M3 15L7 11L10 14L15 9L21 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
               <div class="ready-text">
                 <template v-if="inheritedPrompt">
                   <span class="prompt-preview">{{ inheritedPrompt.slice(0, 50) }}{{ inheritedPrompt.length > 50 ? '...' : '' }}</span>
@@ -1674,15 +1845,15 @@ async function handleDrop(event) {
             <span class="panel-frame-label">{{ index + 1 }}</span>
             <button class="panel-frame-remove" @click.stop="removeReferenceImage(index)">×</button>
           </div>
-          <!-- 添加按钮（使用 label 触发文件选择，更可靠） -->
-          <label 
-            :for="`ref-image-upload-${id}`"
+          <!-- 添加按钮（直接点击触发文件选择） -->
+          <div 
             class="panel-frame-add"
+            @click.stop="triggerRefImageUpload"
             @mousedown.stop
           >
             <span class="add-icon">+</span>
             <span class="add-text">添加</span>
-          </label>
+          </div>
         </div>
         <!-- 拖拽覆盖层 -->
         <div v-if="isRefDragOver" class="panel-drag-overlay">
@@ -1786,6 +1957,32 @@ async function handleDrop(event) {
   font-weight: 500;
   margin-bottom: 8px;
   text-align: center;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.node-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--canvas-text-primary, #ffffff);
+}
+
+/* 标签编辑输入框 */
+.node-label-input {
+  color: var(--canvas-text-primary, #ffffff);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  text-align: center;
+  background: var(--canvas-bg-tertiary, #1a1a1a);
+  border: 1px solid var(--canvas-accent-primary, #3b82f6);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 60px;
+  max-width: 200px;
 }
 
 /* 节点包装器 */
@@ -2086,6 +2283,10 @@ async function handleDrop(event) {
 .ready-icon {
   font-size: 48px;
   opacity: 0.6;
+  color: var(--canvas-text-tertiary, #666);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ready-text {
@@ -2637,6 +2838,62 @@ async function handleDrop(event) {
 
 .node-add-btn-right {
   right: -12px;
+}
+
+/* ========== 左侧快捷操作菜单 ========== */
+.left-quick-menu {
+  position: absolute;
+  left: -180px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--canvas-bg-secondary, #1a1a1a);
+  border: 1px solid var(--canvas-border-subtle, #2a2a2a);
+  border-radius: 12px;
+  padding: 8px;
+  min-width: 160px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  animation: slideInLeft 0.2s ease;
+}
+
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+.left-quick-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--canvas-text-secondary, #ccc);
+}
+
+.left-quick-menu-item:hover {
+  background: var(--canvas-bg-tertiary, #2a2a2a);
+  color: var(--canvas-text-primary, #fff);
+}
+
+.left-menu-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.left-menu-label {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* ========== Resize Handles ========== */

@@ -2,35 +2,95 @@
 /**
  * Canvas.vue - 创作者画布主页面
  */
-import { ref, computed, watch, onMounted, onUnmounted, provide } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { getMe } from '@/api/client'
 import { useCanvasStore } from '@/stores/canvas'
+import { loadWorkflow as loadWorkflowFromServer } from '@/api/canvas/workflow'
 import CanvasBoard from '@/components/canvas/CanvasBoard.vue'
 import CanvasToolbar from '@/components/canvas/CanvasToolbar.vue'
-import CanvasBottomPanel from '@/components/canvas/CanvasBottomPanel.vue'
 import CanvasEmptyState from '@/components/canvas/CanvasEmptyState.vue'
 import NodeSelector from '@/components/canvas/NodeSelector.vue'
 import NodeContextMenu from '@/components/canvas/NodeContextMenu.vue'
 import CanvasContextMenu from '@/components/canvas/CanvasContextMenu.vue'
 import WorkflowTemplates from '@/components/canvas/WorkflowTemplates.vue'
 import GroupToolbar from '@/components/canvas/GroupToolbar.vue'
+import SaveWorkflowDialog from '@/components/canvas/SaveWorkflowDialog.vue'
 
 // 导入画布样式
 import '@/styles/canvas.css'
 
 const router = useRouter()
+const route = useRoute()
 const canvasStore = useCanvasStore()
 
 // 用户信息
 const me = ref(null)
 const loading = ref(true)
+const canvasReady = ref(false) // 画布是否准备好渲染（等待转场动画完成）
 
 // 模板面板
 const showTemplates = ref(false)
 
 // 帮助面板
 const showHelp = ref(false)
+
+// 保存工作流对话框
+const showSaveDialog = ref(false)
+
+// 模式切换
+const isTransitioning = ref(false)
+const showModePopup = ref(false)
+let modeHoverTimer = null
+
+// 鼠标进入模式切换按钮
+function handleModeSwitchEnter() {
+  // 1.5秒后显示弹窗
+  modeHoverTimer = setTimeout(() => {
+    showModePopup.value = true
+  }, 1500)
+}
+
+// 鼠标离开模式切换按钮
+function handleModeSwitchLeave() {
+  if (modeHoverTimer) {
+    clearTimeout(modeHoverTimer)
+    modeHoverTimer = null
+  }
+}
+
+// 点击模式切换按钮 - 直接显示弹窗
+function handleModeSwitchClick() {
+  if (modeHoverTimer) {
+    clearTimeout(modeHoverTimer)
+    modeHoverTimer = null
+  }
+  showModePopup.value = true
+}
+
+// 关闭模式弹窗
+function closeModePopup() {
+  showModePopup.value = false
+}
+
+// 确认切换到新手模式
+async function confirmSwitchToSimpleMode() {
+  if (isTransitioning.value) return
+  isTransitioning.value = true
+  showModePopup.value = false
+  
+  // 保存模式选择
+  localStorage.setItem('userMode', 'simple')
+  
+  // 通知 App.vue 刷新用户信息，确保导航栏显示正确的登录状态
+  window.dispatchEvent(new CustomEvent('user-info-updated'))
+  
+  // 等待转场动画
+  await nextTick()
+  setTimeout(() => {
+    router.push('/generate')
+  }, 600)
+}
 
 // 选中的编组节点
 const selectedGroupNode = computed(() => {
@@ -89,13 +149,30 @@ function closeTemplates() {
 // 提供打开模板函数给子组件
 provide('openTemplates', openTemplates)
 
+// 打开保存对话框
+function openSaveDialog() {
+  showSaveDialog.value = true
+}
+
+// 关闭保存对话框
+function closeSaveDialog() {
+  showSaveDialog.value = false
+}
+
+// 保存成功回调
+function handleWorkflowSaved(workflow) {
+  console.log('[Canvas] 工作流保存成功:', workflow)
+  // 可以显示成功提示
+  alert(`工作流 "${workflow.name}" 保存成功！`)
+}
+
 // 加载用户信息
 async function loadUserInfo() {
   try {
     me.value = await getMe()
     if (!me.value) {
-      // 未登录，跳转到登录页
-      router.push('/auth?redirect=/canvas')
+      // 未登录，跳转到落地页
+      router.push('/')
     }
   } catch (e) {
     console.error('[Canvas] 加载用户信息失败:', e)
@@ -248,11 +325,39 @@ function handleCanvasAddNode(position) {
 // 键盘快捷键（页面级别）
 // 注意：大部分快捷键已移至 CanvasBoard.vue 中实现
 function handleKeyDown(event) {
+  // 检查是否在输入框或可编辑区域中
+  const target = event.target
+  const isInInput = target.tagName === 'INPUT' || 
+                    target.tagName === 'TEXTAREA' || 
+                    target.isContentEditable ||
+                    target.closest('[contenteditable="true"]')
+  
   // Escape 关闭弹窗
   if (event.key === 'Escape') {
     canvasStore.closeNodeSelector()
     canvasStore.closeAllContextMenus()
     // 不清除选择，让用户可以继续操作选中的节点
+  }
+  
+  // Delete 或 Backspace 删除选中的节点
+  if ((event.key === 'Delete' || event.key === 'Backspace') && !isInInput) {
+    event.preventDefault() // 阻止默认行为
+    
+    // 检查是否有选中的节点
+    if (canvasStore.selectedNodeId) {
+      const selectedNode = canvasStore.nodes.find(n => n.id === canvasStore.selectedNodeId)
+      
+      // 如果是编组节点，需要特殊处理
+      if (selectedNode?.type === 'group') {
+        if (confirm('确定要删除这个编组吗？编组内的节点将被恢复为独立节点。')) {
+          handleDisbandGroup()
+        }
+      } else {
+        // 普通节点直接删除
+        canvasStore.removeNode(canvasStore.selectedNodeId)
+        canvasStore.selectedNodeId = null
+      }
+    }
   }
 }
 
@@ -295,7 +400,49 @@ function handleSaveWorkflow() {
 
 onMounted(async () => {
   await loadUserInfo()
+  
+  // 检查URL参数，如果有load参数则加载工作流
+  const loadWorkflowId = route.query.load
+  if (loadWorkflowId && me.value) {
+    try {
+      console.log('[Canvas] 从URL加载工作流:', loadWorkflowId)
+      const result = await loadWorkflowFromServer(loadWorkflowId)
+      
+      if (result.workflow) {
+        const workflow = result.workflow
+        
+        // 设置工作流元信息
+        canvasStore.workflowMeta = {
+          id: workflow.id,
+          name: workflow.name,
+          description: workflow.description
+        }
+        
+        // 加载工作流到画布
+        canvasStore.loadWorkflow(workflow)
+      }
+    } catch (error) {
+      console.error('[Canvas] 加载工作流失败:', error)
+      alert('加载工作流失败：' + error.message)
+    }
+  }
+  
   document.addEventListener('keydown', handleKeyDown)
+  
+  // 延迟设置画布就绪状态，确保转场动画完成后再渲染 VueFlow
+  // 这解决了转场动画与 VueFlow 初始化冲突导致画布卡住的问题
+  await nextTick()
+  
+  // 使用更长的延迟确保页面完全稳定
+  setTimeout(() => {
+    canvasReady.value = true
+    console.log('[Canvas] 画布已就绪')
+    
+    // 强制触发一次重绘
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+  }, 150)
 })
 
 onUnmounted(() => {
@@ -304,28 +451,73 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="canvas-page">
+  <div class="canvas-page" :class="{ 'is-transitioning': isTransitioning }">
+    <!-- 转场遮罩 -->
+    <Transition name="page-transition">
+      <div v-if="isTransitioning" class="transition-overlay">
+        <div class="transition-content">
+          <div class="transition-spinner"></div>
+          <span>切换中...</span>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 模式切换按钮 -->
+    <!-- 模式切换按钮 -->
+    <div 
+      class="mode-switch-btn"
+      @mouseenter="handleModeSwitchEnter"
+      @mouseleave="handleModeSwitchLeave"
+      @click="handleModeSwitchClick"
+    >
+      <div class="mode-switch-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- 模式切换弹窗 -->
+    <Transition name="popup-fade">
+      <div v-if="showModePopup" class="mode-popup-overlay" @click.self="closeModePopup">
+        <div class="mode-popup">
+          <div class="mode-popup-header">
+            <span class="mode-popup-title">切换模式</span>
+            <button class="mode-popup-close" @click="closeModePopup">×</button>
+          </div>
+          <div class="mode-popup-content">
+            <p>确定要切换到新手模式吗？</p>
+            <p class="mode-popup-hint">新手模式提供更简洁的界面，适合快速创作</p>
+          </div>
+          <div class="mode-popup-actions">
+            <button class="mode-popup-btn cancel" @click="closeModePopup">取消</button>
+            <button class="mode-popup-btn confirm" @click="confirmSwitchToSimpleMode">切换为新手模式</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 加载状态 -->
-    <div v-if="loading" class="canvas-loading-screen">
+    <div v-if="loading || !canvasReady" class="canvas-loading-screen">
       <div class="canvas-loading">
         <div class="canvas-loading-spinner"></div>
-        <span>加载中...</span>
+        <span>{{ loading ? '加载中...' : '准备画布...' }}</span>
       </div>
     </div>
     
     <!-- 画布主体 -->
     <div v-else class="canvas-container" @click="handleCanvasClick">
-      <!-- 无限画布 -->
-      <CanvasBoard @dblclick="handleCanvasDoubleClick" />
+      <!-- 无限画布 - 使用 key 强制在就绪后重新挂载 -->
+      <CanvasBoard :key="'canvas-board-' + canvasReady" @dblclick="handleCanvasDoubleClick" />
       
       <!-- 左侧工具栏 -->
-      <CanvasToolbar />
+      <CanvasToolbar @open-save-dialog="openSaveDialog" />
       
       <!-- 空白状态引导 -->
       <CanvasEmptyState v-if="canvasStore.isEmpty" />
-      
-      <!-- 底部输入面板 -->
-      <CanvasBottomPanel v-if="canvasStore.selectedNode && canvasStore.isBottomPanelVisible" />
       
       <!-- 缩放控制 -->
       <div class="canvas-zoom-controls">
@@ -417,6 +609,13 @@ onUnmounted(() => {
         @select="closeTemplates"
       />
       
+      <!-- 保存工作流对话框 -->
+      <SaveWorkflowDialog
+        :visible="showSaveDialog"
+        @close="closeSaveDialog"
+        @saved="handleWorkflowSaved"
+      />
+      
       <!-- 编组工具栏 -->
       <GroupToolbar
         v-if="showGroupToolbar"
@@ -440,8 +639,249 @@ onUnmounted(() => {
 <style scoped>
 .canvas-page {
   width: 100%;
-  height: calc(100vh - 64px);
+  height: 100vh;
   overflow: hidden;
+  position: relative;
+}
+
+.canvas-page.is-transitioning {
+  pointer-events: none;
+}
+
+/* 模式切换按钮 */
+.mode-switch-btn {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.mode-switch-icon {
+  width: 40px;
+  height: 40px;
+  background: rgba(30, 30, 30, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.7);
+  transition: all 0.3s ease;
+  backdrop-filter: blur(10px);
+}
+
+.mode-switch-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mode-switch-btn:hover .mode-switch-icon {
+  background: rgba(60, 60, 60, 0.95);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* 模式切换弹窗 */
+.mode-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 80px 0 0 80px;
+  z-index: 1000;
+}
+
+.mode-popup {
+  background: rgba(30, 30, 30, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  width: 320px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+}
+
+.mode-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mode-popup-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.mode-popup-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.mode-popup-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.mode-popup-content {
+  padding: 20px;
+}
+
+.mode-popup-content p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mode-popup-hint {
+  margin-top: 8px !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  font-size: 13px !important;
+}
+
+.mode-popup-actions {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mode-popup-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-popup-btn.cancel {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.mode-popup-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.mode-popup-btn.confirm {
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  color: #1a1a1a;
+}
+
+.mode-popup-btn.confirm:hover {
+  background: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
+}
+
+.popup-fade-enter-active,
+.popup-fade-leave-active {
+  transition: all 0.25s ease;
+}
+
+.popup-fade-enter-from,
+.popup-fade-leave-to {
+  opacity: 0;
+}
+
+.popup-fade-enter-from .mode-popup,
+.popup-fade-leave-to .mode-popup {
+  transform: scale(0.95) translateY(-10px);
+}
+
+/* 转场遮罩 */
+.transition-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: radial-gradient(ellipse at center, rgba(20, 20, 20, 0.98) 0%, rgba(0, 0, 0, 0.99) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.transition-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 16px;
+}
+
+.transition-spinner {
+  width: 48px;
+  height: 48px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.page-transition-enter-active {
+  animation: transitionIn 0.4s ease-out;
+}
+
+.page-transition-leave-active {
+  animation: transitionOut 0.3s ease-in;
+}
+
+@keyframes transitionIn {
+  from {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes transitionOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
 }
 
 .canvas-loading-screen {
@@ -527,7 +967,7 @@ onUnmounted(() => {
   margin: 0 0 12px;
   font-size: 14px;
   font-weight: 600;
-  color: #f5a623;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .help-section ul {
@@ -564,7 +1004,7 @@ onUnmounted(() => {
 }
 
 .help-section strong {
-  color: #4ecdc4;
+  color: #ffffff;
 }
 </style>
 

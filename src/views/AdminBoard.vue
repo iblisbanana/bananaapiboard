@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { getTenantHeaders, getModelDisplayName } from '@/config/tenant'
+import { formatPoints, formatBalance } from '@/utils/format'
 
 const router = useRouter()
 const me = ref(null)
@@ -253,7 +254,7 @@ async function fetchWithAdminAuth(url, opts = {}) {
   const h = { ...getTenantHeaders(), ...(opts.headers || {}), Authorization: `Bearer ${t}` }
   const r = await fetch(url, { ...opts, headers: h })
   if (r.status === 401) {
-    router.push('/auth?redirect=/adminboard')
+    router.push('/')
     return null
   }
   return r
@@ -266,13 +267,13 @@ function applyFilter() { page.value = 1; loadUsers() }
 async function ensureAdmin() {
   const token = localStorage.getItem('token')
   if (!token) {
-    router.push('/auth?redirect=/adminboard')
+    router.push('/')
     return
   }
   
   const r = await fetch('/api/user/me', { headers: { ...getTenantHeaders(), Authorization: `Bearer ${token}` } })
   if (!r.ok) {
-    router.push('/auth?redirect=/adminboard')
+    router.push('/')
     return
   }
   

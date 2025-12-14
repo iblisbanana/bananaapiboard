@@ -57,6 +57,9 @@ export const useCanvasStore = defineStore('canvas', () => {
   
   const isBottomPanelVisible = ref(true)
   
+  // ========== 工作流元信息 ==========
+  const workflowMeta = ref(null) // { id, name, description }
+  
   // ========== 计算属性 ==========
   const selectedNode = computed(() => {
     if (!selectedNodeId.value) return null
@@ -884,6 +887,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     cancelDragConnection,
     
     // 工作流操作
+    workflowMeta,
     clearCanvas,
     loadWorkflow,
     exportWorkflow,

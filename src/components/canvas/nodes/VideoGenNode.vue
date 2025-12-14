@@ -263,7 +263,7 @@ function handleAddClick(event) {
     <!-- 节点头部 -->
     <div class="canvas-node-header">
       <div class="canvas-node-title">
-        <span class="icon">{{ isImageToVideo ? '🎥' : '📹' }}</span>
+        <span class="icon">{{ isImageToVideo ? '▢' : '▶' }}</span>
         {{ data.title || (isImageToVideo ? '图生视频' : '文生视频') }}
       </div>
       <div class="canvas-node-actions">

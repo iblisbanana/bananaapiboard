@@ -22,6 +22,11 @@ const props = defineProps({
 const canvasStore = useCanvasStore()
 const userInfo = inject('userInfo')
 
+// 标签编辑状态
+const isEditingLabel = ref(false)
+const labelInputRef = ref(null)
+const localLabel = ref(props.data.label || 'Video')
+
 // 本地状态
 const isGenerating = ref(false)
 const errorMessage = ref('')
@@ -110,11 +115,11 @@ function getModelName(modelKey) {
 // 可用模型列表（从启用的模型中筛选）
 const models = computed(() => {
   const allModels = [
-    { value: 'sora-2', label: 'Sora 2', icon: '🎬' },
-    { value: 'sora-2-pro', label: 'Sora 2 Pro', icon: '⭐' },
-    { value: 'veo3.1-components', label: 'VEO 3.1', icon: '🎥' },
-    { value: 'veo3.1', label: 'VEO 3.1 标准', icon: '📹' },
-    { value: 'veo3.1-pro', label: 'VEO 3.1 Pro', icon: '🌟' }
+    { value: 'sora-2', label: 'Sora 2', icon: '▶' },
+    { value: 'sora-2-pro', label: 'Sora 2 Pro', icon: '◆' },
+    { value: 'veo3.1-components', label: 'VEO 3.1', icon: '▶' },
+    { value: 'veo3.1', label: 'VEO 3.1 标准', icon: '▷' },
+    { value: 'veo3.1-pro', label: 'VEO 3.1 Pro', icon: '◇' }
   ]
   
   // 如果有模型启用检查函数，则过滤
@@ -174,7 +179,8 @@ const nodeClass = computed(() => ({
   'processing': props.data.status === 'processing',
   'success': props.data.status === 'success',
   'error': props.data.status === 'error',
-  'resizing': isResizing.value
+  'resizing': isResizing.value,
+  'has-output': hasOutput.value // 有输出时使用无边框设计
 }))
 
 // 节点内容样式
@@ -222,8 +228,11 @@ const progressPercent = computed(() => {
 })
 
 // 判断是否有上游连接（用于显示"已连接"状态）
+// 动态检查是否真的有上游连接边，而不是依赖存储的状态
 const hasUpstream = computed(() => {
-  return props.data.hasUpstream || props.data.inheritedFrom || props.data.inheritedData
+  // 检查是否有连接到当前节点的边
+  const hasIncomingEdge = canvasStore.edges.some(edge => edge.target === props.id)
+  return hasIncomingEdge
 })
 
 // 收集上游节点的所有图片（不考虑顺序）
@@ -313,9 +322,9 @@ const inheritedPrompt = computed(() => {
 function getUpstreamData() {
   // 查找所有连接到当前节点的上游边
   const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
-  if (upstreamEdges.length === 0) return { prompt: '', images: [] }
+  if (upstreamEdges.length === 0) return { prompts: [], images: [] }
   
-  let prompt = ''
+  let prompts = []  // 改为数组，支持多个文本节点
   let images = []
   
   // 遍历所有上游节点，收集数据
@@ -323,15 +332,18 @@ function getUpstreamData() {
     const sourceNode = canvasStore.nodes.find(n => n.id === edge.source)
     if (!sourceNode) continue
     
-    // 文本节点：获取文本内容
+    // 文本节点：获取文本内容（收集所有文本节点的内容）
     if (sourceNode.type === 'text-input' || sourceNode.type === 'text') {
-      const text = sourceNode.data?.text || ''
-      // 去除 HTML 标签
-      const tempDiv = document.createElement('div')
-      tempDiv.innerHTML = text
-      const cleanText = tempDiv.textContent || tempDiv.innerText || ''
-      if (cleanText && !prompt) {
-        prompt = cleanText
+      // 优先获取 LLM 响应，其次是手写文本
+      const text = sourceNode.data?.llmResponse || sourceNode.data?.text || ''
+      if (text) {
+        // 去除 HTML 标签
+        const tempDiv = document.createElement('div')
+        tempDiv.innerHTML = text
+        const cleanText = (tempDiv.textContent || tempDiv.innerText || '').trim()
+        if (cleanText) {
+          prompts.push(cleanText)
+        }
       }
     }
     
@@ -350,7 +362,7 @@ function getUpstreamData() {
     }
   }
   
-  return { prompt, images }
+  return { prompts, images }
 }
 
 // 监听继承数据变化，自动填充提示词
@@ -389,22 +401,165 @@ const modeLabel = computed(() => {
 // 快捷操作
 const quickActions = [
   { 
-    icon: '✍️', 
+    icon: '✎',
     label: '文生视频', 
-    action: () => {
-      generationMode.value = 'text'
-      canvasStore.selectNode(props.id)
-    }
+    action: () => handleTextToVideo()
   },
   { 
-    icon: '🖼️', 
+    icon: '▢',
     label: '图生视频', 
-    action: () => {
-      generationMode.value = 'image'
-      canvasStore.selectNode(props.id)
-    }
+    action: () => handleImageToVideo()
+  },
+  { 
+    icon: '▶',
+    label: '首尾帧生视频', 
+    action: () => handleKeyframesToVideo()
   }
 ]
+
+// 文生视频：创建文本节点
+function handleTextToVideo() {
+  generationMode.value = 'text'
+  
+  // 获取当前节点位置
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 在左侧创建文本节点
+  const textNodePosition = {
+    x: currentNode.position.x - 450,
+    y: currentNode.position.y
+  }
+  
+  const textNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  
+  canvasStore.addNode({
+    id: textNodeId,
+    type: 'text-input',
+    position: textNodePosition,
+    data: {
+      title: '视频描述',
+      text: ''
+    }
+  })
+  
+  // 连接文本节点到视频节点
+  canvasStore.addEdge({
+    source: textNodeId,
+    target: props.id,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  // 选中当前视频节点
+  canvasStore.selectNode(props.id)
+}
+
+// 图生视频：创建1个图片节点
+function handleImageToVideo() {
+  generationMode.value = 'image'
+  
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 在左侧创建图片节点
+  const imageNodePosition = {
+    x: currentNode.position.x - 400,
+    y: currentNode.position.y
+  }
+  
+  const imageNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const defaultImage = '/logo.svg'
+  
+  canvasStore.addNode({
+    id: imageNodeId,
+    type: 'image-input',
+    position: imageNodePosition,
+    data: {
+      title: '参考图片',
+      sourceImages: [defaultImage],
+      status: 'success'
+    }
+  })
+  
+  // 连接图片节点到视频节点
+  canvasStore.addEdge({
+    source: imageNodeId,
+    target: props.id,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  // 选中当前视频节点
+  canvasStore.selectNode(props.id)
+}
+
+// 首尾帧生视频：创建2个图片节点
+function handleKeyframesToVideo() {
+  generationMode.value = 'keyframes'
+  
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  const defaultImage = '/logo.svg'
+  
+  // 创建首帧图片节点（上方）
+  const firstFramePosition = {
+    x: currentNode.position.x - 400,
+    y: currentNode.position.y - 150
+  }
+  
+  const firstFrameId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  
+  canvasStore.addNode({
+    id: firstFrameId,
+    type: 'image-input',
+    position: firstFramePosition,
+    data: {
+      title: '首帧',
+      sourceImages: [defaultImage],
+      status: 'success'
+    }
+  })
+  
+  // 连接首帧到视频节点
+  canvasStore.addEdge({
+    source: firstFrameId,
+    target: props.id,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  // 创建尾帧图片节点（下方）
+  const lastFramePosition = {
+    x: currentNode.position.x - 400,
+    y: currentNode.position.y + 150
+  }
+  
+  const lastFrameId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  
+  canvasStore.addNode({
+    id: lastFrameId,
+    type: 'image-input',
+    position: lastFramePosition,
+    data: {
+      title: '尾帧',
+      sourceImages: [defaultImage],
+      status: 'success'
+    }
+  })
+  
+  // 连接尾帧到视频节点
+  canvasStore.addEdge({
+    source: lastFrameId,
+    target: props.id,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  // 选中当前视频节点
+  canvasStore.selectNode(props.id)
+}
 
 // 监听参数变化，保存到store
 watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, promptText, generationMode], 
@@ -419,6 +574,45 @@ watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, prom
     })
   }
 )
+
+// 同步 label 变化
+watch(() => props.data.label, (newLabel) => {
+  if (newLabel !== undefined && newLabel !== localLabel.value) {
+    localLabel.value = newLabel
+  }
+})
+
+// 双击标签进入编辑模式
+function handleLabelDoubleClick(event) {
+  event.stopPropagation()
+  isEditingLabel.value = true
+  nextTick(() => {
+    if (labelInputRef.value) {
+      labelInputRef.value.focus()
+      labelInputRef.value.select()
+    }
+  })
+}
+
+// 保存标签
+function saveLabelEdit() {
+  isEditingLabel.value = false
+  const newLabel = localLabel.value.trim() || 'Video'
+  localLabel.value = newLabel
+  canvasStore.updateNodeData(props.id, { label: newLabel })
+}
+
+// 标签输入框键盘事件
+function handleLabelKeyDown(event) {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    saveLabelEdit()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    isEditingLabel.value = false
+    localLabel.value = props.data.label || 'Video'
+  }
+}
 
 // 设置生成模式
 function setGenerationMode(mode) {
@@ -478,16 +672,26 @@ async function sendGenerateRequest(finalPrompt, finalImages) {
 async function handleGenerate() {
   // 动态获取上游节点的最新数据
   const upstreamData = getUpstreamData()
+  const userPrompt = promptText.value.trim()
   
-  // 合并提示词：用户输入 > 上游文本 > 继承数据
-  const finalPrompt = promptText.value.trim() || upstreamData.prompt || inheritedPrompt.value
+  // 拼接提示词：上游提示词（可能有多个）+ 用户输入的提示词
+  const upstreamPromptText = upstreamData.prompts.join('\n')
+  let finalPrompt = ''
+  if (upstreamPromptText && userPrompt) {
+    // 两者都有，拼接在一起
+    finalPrompt = `${upstreamPromptText}\n${userPrompt}`
+  } else {
+    // 只有一个，使用其中一个或继承数据
+    finalPrompt = upstreamPromptText || userPrompt || inheritedPrompt.value
+  }
   
   // 合并参考图片：上游图片 > 继承图片 > 已设置的参考图
   const finalImages = upstreamData.images.length > 0 ? upstreamData.images : referenceImages.value
   
   console.log('[VideoNode] 生成参数:', { 
-    userPrompt: promptText.value.trim(),
-    upstreamPrompt: upstreamData.prompt,
+    userPrompt,
+    upstreamPrompts: upstreamData.prompts,
+    upstreamPromptText,
     finalPrompt,
     upstreamImages: upstreamData.images,
     finalImages,
@@ -768,10 +972,10 @@ function createUpstreamImageNode(imageUrl) {
     y: currentNode.position.y + offsetY - 100
   }
   
-  // 创建图片节点
+  // 创建图片节点 - 使用 image-input 类型，与拖拽上传和文件选择器保持一致
   canvasStore.addNode({
     id: newNodeId,
-    type: 'image',
+    type: 'image-input',
     position: newNodePosition,
     data: {
       title: `参考图 ${existingUpstreamCount + 1}`,
@@ -1073,6 +1277,13 @@ function handleAddRightClick(event) {
   event.stopPropagation()
 }
 
+// 视频加载完成后显示第一帧
+function handleVideoLoaded(event) {
+  const video = event.target
+  // 设置到第一帧的位置（0.1秒处，确保不是完全黑屏）
+  video.currentTime = 0.1
+}
+
 // 下载视频
 function downloadVideo() {
   if (props.data.output?.url) {
@@ -1092,7 +1303,25 @@ function downloadVideo() {
     />
     
     <!-- 节点标签 -->
-    <div class="node-label">video</div>
+    <div 
+      v-if="!isEditingLabel" 
+      class="node-label"
+      @dblclick="handleLabelDoubleClick"
+      :title="'双击重命名'"
+    >
+      {{ localLabel }}
+    </div>
+    <input
+      v-else
+      ref="labelInputRef"
+      v-model="localLabel"
+      type="text"
+      class="node-label-input"
+      @blur="saveLabelEdit"
+      @keydown="handleLabelKeyDown"
+      @click.stop
+      @mousedown.stop
+    />
     
     <!-- 节点主体 -->
     <div class="node-wrapper">
@@ -1106,9 +1335,72 @@ function downloadVideo() {
       </button>
       
       <!-- 节点卡片 -->
-      <div class="node-card" :style="contentStyle">
-        <!-- 主内容区域 -->
-        <div class="node-content">
+      <div 
+        class="node-card" 
+        :class="{ 
+          'is-processing': data.status === 'processing'
+        }"
+        :style="contentStyle"
+      >
+        <!-- 彗星环绕发光特效（生成中显示） -->
+        <svg v-if="data.status === 'processing'" class="comet-border" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <!-- 彗星渐变 -->
+            <linearGradient id="comet-gradient-video" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="transparent" />
+              <stop offset="70%" stop-color="rgba(74, 222, 128, 0.3)" />
+              <stop offset="90%" stop-color="rgba(74, 222, 128, 0.8)" />
+              <stop offset="100%" stop-color="#4ade80" />
+            </linearGradient>
+            <!-- 发光滤镜 -->
+            <filter id="comet-glow-video" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- 底层发光边框 -->
+          <rect 
+            x="1" y="1" width="98" height="98" rx="8" ry="8"
+            fill="none" 
+            stroke="rgba(74, 222, 128, 0.15)" 
+            stroke-width="1"
+          />
+          <!-- 彗星轨迹 -->
+          <rect 
+            class="comet-path"
+            x="1" y="1" width="98" height="98" rx="8" ry="8"
+            fill="none" 
+            stroke="url(#comet-gradient-video)" 
+            stroke-width="2"
+            filter="url(#comet-glow-video)"
+          />
+        </svg>
+        
+        <!-- 视频输出预览（无边框设计） -->
+        <div v-if="hasOutput" class="video-output-wrapper">
+          <video 
+            :src="data.output.url" 
+            controls
+            preload="auto"
+            class="video-player-output"
+            playsinline
+            @loadedmetadata="handleVideoLoaded"
+          ></video>
+          <div class="video-overlay-actions">
+            <button class="overlay-action-btn" @click="downloadVideo" title="下载视频">
+              ⬇️
+            </button>
+            <button class="overlay-action-btn" @click="handleRegenerate" title="重新生成">
+              🔄
+            </button>
+          </div>
+        </div>
+        
+        <!-- 主内容区域（非输出状态） -->
+        <div v-else class="node-content">
           <!-- 加载中状态 -->
           <div v-if="data.status === 'processing'" class="preview-loading">
             <div class="loading-spinner"></div>
@@ -1125,24 +1417,16 @@ function downloadVideo() {
             <button class="retry-btn" @click="handleRegenerate">重试</button>
           </div>
           
-          <!-- 输出预览 -->
-          <div v-else-if="hasOutput" class="video-preview">
-            <video 
-              :src="data.output.url" 
-              controls
-              preload="auto"
-              class="video-player"
-              @loadeddata="$event.target.currentTime = 0.1"
-            ></video>
-            <div class="video-actions">
-              <button class="action-btn" @click="downloadVideo">⬇️ 下载</button>
-              <button class="action-btn" @click="handleRegenerate">🔄 重新生成</button>
-            </div>
-          </div>
-          
           <!-- 有上游连接时 - 显示"已连接"等待状态 -->
           <div v-else-if="hasUpstream" class="ready-state">
-            <div class="ready-icon">🎬</div>
+            <div class="ready-icon">
+              <!-- SVG 黑白视频图标 -->
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="6" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M16 10.5L21 7.5V16.5L16 13.5V10.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="6" cy="10" r="0.5" fill="currentColor"/>
+              </svg>
+            </div>
             <div class="ready-text">
               <template v-if="inheritedPrompt">
                 <span class="prompt-preview">{{ inheritedPrompt.slice(0, 50) }}{{ inheritedPrompt.length > 50 ? '...' : '' }}</span>
@@ -1370,6 +1654,32 @@ function downloadVideo() {
   font-weight: 500;
   margin-bottom: 8px;
   text-align: center;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.node-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--canvas-text-primary, #ffffff);
+}
+
+/* 标签编辑输入框 */
+.node-label-input {
+  color: var(--canvas-text-primary, #ffffff);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  text-align: center;
+  background: var(--canvas-bg-tertiary, #1a1a1a);
+  border: 1px solid var(--canvas-accent-primary, #3b82f6);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 60px;
+  max-width: 200px;
 }
 
 /* 节点包装器 */
@@ -1388,7 +1698,7 @@ function downloadVideo() {
   position: relative;
   display: flex;
   flex-direction: column;
-  transition: border-color 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .video-node:hover .node-card {
@@ -1398,6 +1708,57 @@ function downloadVideo() {
 .video-node.selected .node-card {
   border-color: var(--canvas-accent-primary, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+/* 有输出时 - 无边框设计 */
+.video-node.has-output .node-card {
+  background: transparent;
+  border: none;
+  overflow: visible;
+  padding: 0;
+}
+
+.video-node.has-output:hover .node-card {
+  border-color: transparent;
+}
+
+/* ========== 彗星环绕发光特效（生成中） ========== */
+.node-card.is-processing {
+  position: relative;
+  overflow: visible;
+}
+
+.comet-border {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 18px;
+}
+
+.comet-path {
+  stroke-dasharray: 25 75;
+  stroke-dashoffset: 0;
+  animation: comet-rotate 2.5s linear infinite;
+}
+
+@keyframes comet-rotate {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 处理中的节点边框发光 */
+.node-card.is-processing {
+  box-shadow: 
+    0 0 10px rgba(74, 222, 128, 0.2),
+    0 0 20px rgba(74, 222, 128, 0.1),
+    inset 0 0 0 1px rgba(74, 222, 128, 0.3);
 }
 
 /* 主内容区域 */
@@ -1511,7 +1872,66 @@ function downloadVideo() {
   color: var(--canvas-accent-primary, #3b82f6);
 }
 
-/* 视频预览 */
+/* ========== 视频输出预览（无边框设计） ========== */
+.video-output-wrapper {
+  position: relative;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.video-player-output {
+  width: 100%;
+  display: block;
+  background: #000;
+  border-radius: 12px;
+}
+
+/* 悬浮操作按钮 */
+.video-overlay-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 20;
+}
+
+.video-output-wrapper:hover .video-overlay-actions {
+  opacity: 1;
+}
+
+.overlay-action-btn {
+  width: 36px;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.overlay-action-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.05);
+}
+
+.overlay-action-btn:active {
+  transform: scale(0.95);
+}
+
+/* ========== 旧版视频预览样式（保留用于其他状态） ========== */
 .video-preview {
   flex: 1;
   display: flex;
@@ -1563,6 +1983,10 @@ function downloadVideo() {
 .ready-icon {
   font-size: 48px;
   opacity: 0.6;
+  color: var(--canvas-text-tertiary, #666);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ready-text {
@@ -1584,19 +2008,18 @@ function downloadVideo() {
 /* 空状态 */
 .empty-state {
   flex: 1;
-  padding: 8px;
+  padding: 20px;
 }
 
 .hint-text {
-  color: var(--canvas-text-tertiary, #666);
+  color: var(--canvas-text-tertiary, #666666);
   font-size: 13px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .quick-action {
   display: flex;
   align-items: center;
-  gap: 12px;
   padding: 12px 8px;
   color: var(--canvas-text-secondary, #a0a0a0);
   font-size: 14px;
@@ -1607,13 +2030,18 @@ function downloadVideo() {
 
 .quick-action:hover {
   background: rgba(255, 255, 255, 0.05);
-  color: var(--canvas-text-primary, #fff);
+  color: var(--canvas-text-primary, #ffffff);
 }
 
 .action-icon {
   font-size: 16px;
   width: 24px;
   text-align: center;
+  margin-right: 8px;
+}
+
+.action-label {
+  flex: 1;
 }
 
 /* 底部配置面板 - 自适应内容宽度，确保参数完整显示 */

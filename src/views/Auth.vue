@@ -35,7 +35,7 @@ const resetMode = ref(false) // 密码重置模式
 const newPassword = ref('')
 const confirmPassword = ref('')
 const emailPrefix = ref('') // 邮箱前缀
-const emailSuffix = ref('') // 邮箱后缀
+const emailSuffix = ref('qq.com') // 邮箱后缀，默认为qq.com
 
 // 加载邀请奖励配置
 async function loadInviteRewards() {
@@ -329,21 +329,23 @@ async function submit() {
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
               📧 邮箱 *
             </label>
-            <div class="flex space-x-2">
+            <div class="flex items-center gap-2">
               <input 
                 v-model="emailPrefix" 
                 type="text" 
-                class="input flex-1"
+                class="input" 
+                style="flex: 2; min-width: 0;"
                 placeholder="邮箱前缀"
                 required
               />
-              <span class="flex items-center text-slate-500 dark:text-slate-400">@</span>
+              <span class="flex items-center text-slate-700 dark:text-slate-300 font-medium">@</span>
               <select 
                 v-model="emailSuffix" 
-                class="input flex-1"
+                class="input bg-white dark:bg-dark-700 text-slate-900 dark:text-slate-100 font-medium" 
+                style="flex: 1; min-width: 120px;"
                 required
               >
-                <option value="" disabled>选择邮箱后缀</option>
+                <option value="" disabled>选择后缀</option>
                 <option v-for="domain in emailConfig.email_whitelist" :key="domain" :value="domain">
                   {{ domain }}
                 </option>

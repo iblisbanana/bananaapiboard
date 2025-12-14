@@ -1,47 +1,34 @@
 /**
- * Canvas Workflow API
- * 工作流保存/加载相关 API
+ * Canvas 工作流 API
  */
 import { getApiUrl, getTenantHeaders } from '@/config/tenant'
 
-// 获取通用请求头
-function getHeaders(options = {}) {
-  const token = localStorage.getItem('token')
-  return {
-    ...getTenantHeaders(),
-    ...(options.json ? { 'Content-Type': 'application/json' } : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...options.extra
-  }
+/**
+ * 获取API基础URL（动态获取，确保每次请求时都是最新的）
+ */
+function getApiBase() {
+  // getApiUrl 期望传入路径参数，传入空字符串获取基础URL
+  const url = getApiUrl('')
+  // 如果返回空或undefined，使用空字符串（相对路径）
+  return url || ''
 }
 
 /**
- * 获取用户的工作流列表
+ * 获取用户存储配额
  */
-export async function getWorkflows() {
-  const response = await fetch(getApiUrl('/api/canvas/workflows'), {
-    headers: getHeaders()
+export async function getStorageQuota() {
+  const response = await fetch(`${getApiBase()}/api/canvas/storage/quota`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '获取工作流列表失败')
-  }
-  
-  return response.json()
-}
-
-/**
- * 获取单个工作流详情
- */
-export async function getWorkflow(id) {
-  const response = await fetch(getApiUrl(`/api/canvas/workflows/${id}`), {
-    headers: getHeaders()
-  })
-  
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '获取工作流失败')
+    const error = await response.json()
+    throw new Error(error.error || '获取配额失败')
   }
   
   return response.json()
@@ -50,21 +37,88 @@ export async function getWorkflow(id) {
 /**
  * 保存工作流
  */
-export async function saveWorkflow(workflow) {
-  const method = workflow.id ? 'PUT' : 'POST'
-  const url = workflow.id 
-    ? getApiUrl(`/api/canvas/workflows/${workflow.id}`)
-    : getApiUrl('/api/canvas/workflows')
+export async function saveWorkflow(workflowData) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    },
+    body: JSON.stringify(workflowData)
+  })
   
-  const response = await fetch(url, {
-    method,
-    headers: getHeaders({ json: true }),
-    body: JSON.stringify(workflow)
+  // 获取响应文本
+  const text = await response.text()
+  
+  // 如果响应为空
+  if (!text) {
+    if (!response.ok) {
+      throw new Error(`保存失败 (HTTP ${response.status})`)
+    }
+    return { success: true }
+  }
+  
+  // 解析JSON
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch (e) {
+    throw new Error(`服务器响应格式错误: ${text.substring(0, 100)}`)
+  }
+  
+  if (!response.ok) {
+    throw new Error(data.error || '保存失败')
+  }
+  
+  return data
+}
+
+/**
+ * 加载工作流
+ */
+export async function loadWorkflow(workflowId) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '保存工作流失败')
+    const error = await response.json()
+    throw new Error(error.error || '加载失败')
+  }
+  
+  return response.json()
+}
+
+/**
+ * 获取工作流列表
+ */
+export async function getWorkflowList(params = {}) {
+  const queryParams = new URLSearchParams({
+    page: params.page || 1,
+    pageSize: params.pageSize || 20,
+    ...(params.status && { status: params.status }),
+    ...(params.orderBy && { orderBy: params.orderBy }),
+    ...(params.orderDir && { orderDir: params.orderDir })
+  })
+  
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows?${queryParams}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
+  })
+  
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || '获取列表失败')
   }
   
   return response.json()
@@ -73,97 +127,170 @@ export async function saveWorkflow(workflow) {
 /**
  * 删除工作流
  */
-export async function deleteWorkflow(id) {
-  const response = await fetch(getApiUrl(`/api/canvas/workflows/${id}`), {
+export async function deleteWorkflow(workflowId) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}`, {
     method: 'DELETE',
-    headers: getHeaders()
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '删除工作流失败')
+    const error = await response.json()
+    throw new Error(error.error || '删除失败')
   }
   
   return response.json()
 }
 
 /**
- * 获取工作流模板列表
+ * 获取工作流版本历史
+ */
+export async function getWorkflowVersions(workflowId) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}/versions`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
+  })
+  
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || '获取版本失败')
+  }
+  
+  return response.json()
+}
+
+/**
+ * 获取工作流模板
  */
 export async function getWorkflowTemplates() {
-  const response = await fetch(getApiUrl('/api/canvas/templates'), {
-    headers: getHeaders()
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/templates`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    }
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '获取模板列表失败')
+    const error = await response.json()
+    throw new Error(error.error || '获取模板失败')
   }
   
   return response.json()
 }
 
 /**
- * 获取单个模板详情
+ * 恢复到指定版本
  */
-export async function getWorkflowTemplate(id) {
-  const response = await fetch(getApiUrl(`/api/canvas/templates/${id}`), {
-    headers: getHeaders()
+export async function restoreWorkflowVersion(workflowId, versionNumber) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}/restore`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getTenantHeaders()
+    },
+    body: JSON.stringify({ versionNumber })
   })
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}))
-    throw new Error(error.message || '获取模板失败')
+    const error = await response.json()
+    throw new Error(error.error || '恢复失败')
   }
   
   return response.json()
 }
 
 /**
- * 本地存储工作流（临时方案）
+ * 本地存储工作流（浏览器LocalStorage）
  */
 export function saveWorkflowLocal(workflow) {
-  const key = `canvas_workflow_${workflow.id || 'draft'}`
-  localStorage.setItem(key, JSON.stringify({
-    ...workflow,
-    updatedAt: new Date().toISOString()
-  }))
+  try {
+    const key = `workflow_${workflow.id}`
+    localStorage.setItem(key, JSON.stringify(workflow))
+    
+    // 更新工作流列表
+    const list = getWorkflowsLocal()
+    const existingIndex = list.findIndex(w => w.id === workflow.id)
+    
+    const workflowMeta = {
+      id: workflow.id,
+      name: workflow.name,
+      nodeCount: workflow.nodes?.length || 0,
+      updatedAt: Date.now()
+    }
+    
+    if (existingIndex >= 0) {
+      list[existingIndex] = workflowMeta
+    } else {
+      list.unshift(workflowMeta)
+    }
+    
+    localStorage.setItem('workflows_list', JSON.stringify(list))
+    
+    return { success: true, workflow: workflowMeta }
+  } catch (error) {
+    console.error('[LocalStorage] 保存工作流失败:', error)
+    throw new Error('本地保存失败，可能是存储空间不足')
+  }
 }
 
 /**
  * 从本地存储加载工作流
  */
-export function loadWorkflowLocal(id = 'draft') {
-  const key = `canvas_workflow_${id}`
-  const data = localStorage.getItem(key)
-  if (data) {
-    try {
-      return JSON.parse(data)
-    } catch (e) {
-      return null
+export function loadWorkflowLocal(workflowId) {
+  try {
+    const key = `workflow_${workflowId}`
+    const data = localStorage.getItem(key)
+    
+    if (!data) {
+      throw new Error('工作流不存在')
     }
+    
+    return JSON.parse(data)
+  } catch (error) {
+    console.error('[LocalStorage] 加载工作流失败:', error)
+    throw error
   }
-  return null
 }
 
 /**
- * 获取本地存储的所有工作流
+ * 获取本地存储的工作流列表
  */
-export function getLocalWorkflows() {
-  const workflows = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    if (key.startsWith('canvas_workflow_')) {
-      try {
-        const data = JSON.parse(localStorage.getItem(key))
-        workflows.push(data)
-      } catch (e) {
-        // 忽略解析错误
-      }
-    }
+export function getWorkflowsLocal() {
+  try {
+    const data = localStorage.getItem('workflows_list')
+    return data ? JSON.parse(data) : []
+  } catch (error) {
+    console.error('[LocalStorage] 获取列表失败:', error)
+    return []
   }
-  return workflows.sort((a, b) => 
-    new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)
-  )
 }
 
+/**
+ * 删除本地存储的工作流
+ */
+export function deleteWorkflowLocal(workflowId) {
+  try {
+    const key = `workflow_${workflowId}`
+    localStorage.removeItem(key)
+    
+    // 更新列表
+    const list = getWorkflowsLocal()
+    const newList = list.filter(w => w.id !== workflowId)
+    localStorage.setItem('workflows_list', JSON.stringify(newList))
+    
+    return { success: true }
+  } catch (error) {
+    console.error('[LocalStorage] 删除工作流失败:', error)
+    throw error
+  }
+}

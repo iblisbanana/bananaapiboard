@@ -24,6 +24,9 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 const canvasStore = useCanvasStore()
 
+// 文件上传输入框引用
+const fileInputRef = ref(null)
+
 // 选中的节点类型
 const selectedType = ref(null)
 
@@ -77,6 +80,13 @@ const panelStyle = computed(() => {
   }
 })
 
+// LLM 预设映射表：将 LLM 节点类型映射到文本节点 + 预设
+const LLM_PRESET_MAP = {
+  'llm-prompt-enhance': 'prompt-enhance',
+  'llm-content-expand': 'content-expand',
+  'llm-storyboard': 'storyboard'
+}
+
 // 选择节点类型
 function selectNodeType(type) {
   selectedType.value = type
@@ -116,6 +126,14 @@ function selectNodeType(type) {
   // 准备节点初始数据
   const nodeData = {}
   
+  // 检查是否是 LLM 预设类型，如果是，转换为文本节点 + 预设
+  let actualNodeType = type
+  if (LLM_PRESET_MAP[type]) {
+    actualNodeType = 'text-input'
+    nodeData.selectedPreset = LLM_PRESET_MAP[type]
+    nodeData.title = NODE_TYPE_CONFIG[type]?.label || '文本'
+  }
+  
   // 右侧添加：新节点接收来自触发节点的数据
   if (triggerNode.value && !isLeftTrigger.value) {
     nodeData.hasUpstream = true
@@ -149,7 +167,8 @@ function selectNodeType(type) {
   }
   
   console.log('[NodeSelector] 创建节点:', { 
-    type, 
+    type: actualNodeType,
+    originalType: type,
     position, 
     nodeData, 
     triggerNodeId: props.triggerNodeId,
@@ -165,9 +184,9 @@ function selectNodeType(type) {
     canvasStore.triggerNodeId = null
   }
   
-  // 创建节点
+  // 创建节点（使用 actualNodeType 而不是 type）
   const newNode = canvasStore.addNode({
-    type,
+    type: actualNodeType,
     position,
     data: nodeData
   })
@@ -198,6 +217,154 @@ function selectNodeType(type) {
 // 阻止点击冒泡
 function handlePanelClick(event) {
   event.stopPropagation()
+}
+
+// 打开文件选择对话框
+function handleUploadClick() {
+  if (fileInputRef.value) {
+    fileInputRef.value.click()
+  }
+}
+
+// 处理文件上传
+async function handleFileUpload(event) {
+  const files = event.target.files
+  if (!files || files.length === 0) return
+  
+  // 计算节点位置
+  let position = { x: 200, y: 200 }
+  if (canvasStore.nodeSelectorFlowPosition) {
+    position = { ...canvasStore.nodeSelectorFlowPosition }
+    position.x -= 120
+    position.y -= 50
+  } else {
+    position = { x: 100, y: 100 }
+  }
+  
+  // 处理每个文件
+  let offsetX = 0
+  let offsetY = 0
+  
+  for (const file of files) {
+    const fileType = file.type
+    
+    try {
+      // 根据文件类型创建不同的节点
+      let nodeType = null
+      let nodeData = {}
+      
+      // 图片文件 - 与拖拽上传保持一致
+      if (fileType.startsWith('image/')) {
+        const dataUrl = await readFileAsBase64(file)
+        nodeType = 'image-input'
+        nodeData = {
+          title: file.name || '图片',
+          nodeRole: 'source',
+          sourceImages: [dataUrl]
+        }
+      }
+      // 视频文件 - 与拖拽上传保持一致
+      else if (fileType.startsWith('video/')) {
+        const dataUrl = await readFileAsBase64(file)
+        nodeType = 'video'
+        nodeData = {
+          title: file.name || '视频',
+          status: 'success',
+          output: {
+            type: 'video',
+            url: dataUrl
+          }
+        }
+      }
+      // 音频文件 - 与拖拽上传保持一致
+      else if (fileType.startsWith('audio/')) {
+        const dataUrl = await readFileAsBase64(file)
+        nodeType = 'text-input'
+        nodeData = {
+          title: `🎵 ${file.name || '音频'}`,
+          text: `音频文件: ${file.name}`,
+          audioData: dataUrl
+        }
+      }
+      // 文本文件
+      else if (fileType.startsWith('text/') || 
+               fileType === 'application/json' ||
+               file.name.endsWith('.txt') ||
+               file.name.endsWith('.md') ||
+               file.name.endsWith('.json')) {
+        const textContent = await readFileAsText(file)
+        nodeType = 'text-input'
+        nodeData = {
+          title: file.name,
+          text: textContent
+        }
+      }
+      // 其他文件类型
+      else {
+        nodeType = 'text-input'
+        nodeData = {
+          title: file.name,
+          text: `已上传文件: ${file.name}\n类型: ${fileType}\n大小: ${formatFileSize(file.size)}`
+        }
+      }
+      
+      // 创建节点
+      if (nodeType) {
+        const nodePosition = {
+          x: position.x + offsetX,
+          y: position.y + offsetY
+        }
+        
+        canvasStore.addNode({
+          type: nodeType,
+          position: nodePosition,
+          data: nodeData
+        })
+        
+        // 多文件时错开位置
+        offsetX += 50
+        offsetY += 50
+      }
+      
+    } catch (error) {
+      console.error('[NodeSelector] 文件上传失败:', error, file.name)
+    }
+  }
+  
+  // 清空文件选择，允许重复上传同一文件
+  event.target.value = ''
+  
+  // 关闭面板
+  emit('close')
+}
+
+// 读取文件为 Base64（与 CanvasBoard 中的实现保持一致）
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => resolve(e.target.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+// 读取文件为文本
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => resolve(e.target.result)
+    reader.onerror = reject
+    reader.readAsText(file)
+  })
+}
+
+// 格式化文件大小
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 </script>
 
@@ -239,13 +406,23 @@ function handlePanelClick(event) {
     <template v-if="!triggerNode">
       <div class="node-selector-divider"></div>
       <div class="node-selector-title">添加资源</div>
-      <div class="node-selector-item" @click="() => {}">
-        <div class="node-selector-icon">⬆️</div>
+      <div class="node-selector-item" @click="handleUploadClick">
+        <div class="node-selector-icon">⬆</div>
         <div class="node-selector-info">
           <div class="node-selector-name">上传</div>
         </div>
       </div>
     </template>
+    
+    <!-- 隐藏的文件上传输入框 -->
+    <input
+      ref="fileInputRef"
+      type="file"
+      multiple
+      accept="*/*"
+      style="display: none"
+      @change="handleFileUpload"
+    />
   </div>
 </template>
 
