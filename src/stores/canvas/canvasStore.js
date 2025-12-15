@@ -31,6 +31,11 @@ export const useCanvasStore = defineStore('canvas', () => {
   // ========== 剪贴板 ==========
   const clipboard = ref(null)      // 复制的节点数据
   
+  // ========== 图片编辑模式状态 ==========
+  const editingNodeId = ref(null)        // 当前正在编辑的节点ID
+  const editTool = ref(null)             // 当前编辑工具: 'repaint' | 'erase' | 'crop' | 'annotate' | null
+  const editModeViewport = ref(null)     // 进入编辑模式前的视口状态（用于退出时恢复）
+  
   // ========== UI 状态 ==========
   const isNodeSelectorOpen = ref(false)
   const nodeSelectorPosition = ref({ x: 0, y: 0 }) // 屏幕坐标（用于显示面板）
@@ -60,6 +65,11 @@ export const useCanvasStore = defineStore('canvas', () => {
   // ========== 工作流元信息 ==========
   const workflowMeta = ref(null) // { id, name, description }
   
+  // ========== 多标签状态 ==========
+  const workflowTabs = ref([]) // 工作流标签列表 [{ id, name, workflowId, nodes, edges, viewport, hasChanges }]
+  const activeTabId = ref(null) // 当前活动标签ID
+  const maxTabs = 10 // 最大标签数量
+  
   // ========== 计算属性 ==========
   const selectedNode = computed(() => {
     if (!selectedNodeId.value) return null
@@ -88,6 +98,9 @@ export const useCanvasStore = defineStore('canvas', () => {
     if (!skipHistory) {
       saveHistory() // 保存历史
     }
+    
+    // 标记当前标签有变更
+    markCurrentTabChanged()
     
     const newNode = {
       id: node.id || generateId(),
@@ -149,6 +162,7 @@ export const useCanvasStore = defineStore('canvas', () => {
    */
   function removeNode(nodeId) {
     saveHistory() // 保存历史
+    markCurrentTabChanged() // 标记变更
     
     // 删除相关连线
     edges.value = edges.value.filter(
@@ -642,6 +656,69 @@ export const useCanvasStore = defineStore('canvas', () => {
     closeCanvasContextMenu()
   }
   
+  // ========== 图片编辑模式操作 ==========
+  
+  /**
+   * 进入图片编辑模式
+   * @param {String} nodeId - 要编辑的节点ID
+   * @param {String} tool - 编辑工具类型: 'repaint' | 'erase' | 'crop' | 'annotate' | 'enhance' | 'cutout' | 'expand'
+   */
+  function enterEditMode(nodeId, tool) {
+    const node = nodes.value.find(n => n.id === nodeId)
+    if (!node) {
+      console.warn('[Canvas] 无法进入编辑模式：节点不存在', nodeId)
+      return false
+    }
+    
+    // 保存当前视口状态（用于退出时恢复）
+    editModeViewport.value = { ...viewport.value }
+    
+    // 设置编辑状态
+    editingNodeId.value = nodeId
+    editTool.value = tool
+    
+    // 选中该节点
+    selectNode(nodeId)
+    
+    console.log('[Canvas] 进入编辑模式', { nodeId, tool })
+    return true
+  }
+  
+  /**
+   * 退出图片编辑模式
+   * @param {Boolean} restoreViewport - 是否恢复之前的视口状态
+   */
+  function exitEditMode(restoreViewport = true) {
+    if (!editingNodeId.value) return
+    
+    console.log('[Canvas] 退出编辑模式', editingNodeId.value)
+    
+    // 恢复视口状态
+    if (restoreViewport && editModeViewport.value) {
+      viewport.value = { ...editModeViewport.value }
+    }
+    
+    // 清除编辑状态
+    editingNodeId.value = null
+    editTool.value = null
+    editModeViewport.value = null
+  }
+  
+  /**
+   * 切换编辑工具
+   * @param {String} tool - 新的编辑工具
+   */
+  function switchEditTool(tool) {
+    if (!editingNodeId.value) return
+    editTool.value = tool
+    console.log('[Canvas] 切换编辑工具', tool)
+  }
+  
+  /**
+   * 检查是否处于编辑模式
+   */
+  const isInEditMode = computed(() => editingNodeId.value !== null)
+  
   /**
    * 更新视口
    */
@@ -681,6 +758,293 @@ export const useCanvasStore = defineStore('canvas', () => {
       edges: edges.value,
       viewport: viewport.value
     }
+  }
+  
+  // ========== 多标签操作 ==========
+  
+  /**
+   * 生成标签ID
+   */
+  function generateTabId() {
+    return `tab-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
+  }
+  
+  /**
+   * 创建新标签
+   */
+  function createTab(workflow = null) {
+    // 检查标签数量限制
+    if (workflowTabs.value.length >= maxTabs) {
+      console.warn(`[Canvas] 已达到最大标签数量 ${maxTabs}`)
+      return null
+    }
+    
+    const tabId = generateTabId()
+    const tab = {
+      id: tabId,
+      name: workflow?.name || '新工作流',
+      workflowId: workflow?.id || null,
+      nodes: workflow?.nodes || [],
+      edges: workflow?.edges || [],
+      viewport: workflow?.viewport || { x: 0, y: 0, zoom: 1 },
+      hasChanges: false
+    }
+    
+    workflowTabs.value.push(tab)
+    
+    // 切换到新标签
+    switchToTab(tabId)
+    
+    return tab
+  }
+  
+  /**
+   * 切换标签
+   */
+  function switchToTab(tabId) {
+    const currentTab = workflowTabs.value.find(t => t.id === activeTabId.value)
+    const targetTab = workflowTabs.value.find(t => t.id === tabId)
+    
+    if (!targetTab) return
+    
+    // 保存当前标签的状态
+    if (currentTab) {
+      currentTab.nodes = JSON.parse(JSON.stringify(nodes.value))
+      currentTab.edges = JSON.parse(JSON.stringify(edges.value))
+      currentTab.viewport = { ...viewport.value }
+    }
+    
+    // 切换到目标标签
+    activeTabId.value = tabId
+    nodes.value = JSON.parse(JSON.stringify(targetTab.nodes))
+    edges.value = JSON.parse(JSON.stringify(targetTab.edges))
+    viewport.value = { ...targetTab.viewport }
+    
+    // 更新工作流元信息
+    workflowMeta.value = targetTab.workflowId ? {
+      id: targetTab.workflowId,
+      name: targetTab.name,
+      description: ''
+    } : null
+    
+    // 清空选择
+    selectedNodeId.value = null
+    selectedEdgeId.value = null
+    selectedNodeIds.value = []
+  }
+  
+  /**
+   * 关闭标签
+   */
+  function closeTab(tabId) {
+    const index = workflowTabs.value.findIndex(t => t.id === tabId)
+    if (index === -1) return
+    
+    // 如果是最后一个标签，清空画布并关闭所有标签（显示首页）
+    if (workflowTabs.value.length === 1) {
+      // 清空画布
+      nodes.value = []
+      edges.value = []
+      viewport.value = { x: 0, y: 0, zoom: 1 }
+      selectedNodeId.value = null
+      selectedEdgeId.value = null
+      selectedNodeIds.value = []
+      workflowMeta.value = null
+      
+      // 清空标签列表
+      workflowTabs.value = []
+      activeTabId.value = null
+      
+      console.log('[Canvas] 已关闭最后一个标签，返回首页')
+      return
+    }
+    
+    // 如果关闭的是当前标签，切换到相邻标签
+    if (tabId === activeTabId.value) {
+      const nextIndex = index === workflowTabs.value.length - 1 ? index - 1 : index + 1
+      switchToTab(workflowTabs.value[nextIndex].id)
+    }
+    
+    // 移除标签
+    workflowTabs.value.splice(index, 1)
+  }
+  
+  /**
+   * 更新当前标签名称
+   */
+  function updateCurrentTabName(name) {
+    const currentTab = workflowTabs.value.find(t => t.id === activeTabId.value)
+    if (currentTab) {
+      currentTab.name = name
+    }
+  }
+  
+  /**
+   * 更新指定标签名称
+   */
+  function updateTabName(tabId, name) {
+    const tab = workflowTabs.value.find(t => t.id === tabId)
+    if (tab) {
+      tab.name = name
+      // 如果是当前标签，也更新 workflowMeta
+      if (tabId === activeTabId.value && workflowMeta.value) {
+        workflowMeta.value.name = name
+      }
+    }
+  }
+  
+  /**
+   * 重排序标签
+   */
+  function reorderTabs(fromIndex, toIndex) {
+    if (fromIndex === toIndex) return
+    if (fromIndex < 0 || fromIndex >= workflowTabs.value.length) return
+    if (toIndex < 0 || toIndex >= workflowTabs.value.length) return
+    
+    const tabs = [...workflowTabs.value]
+    const [removed] = tabs.splice(fromIndex, 1)
+    tabs.splice(toIndex, 0, removed)
+    workflowTabs.value = tabs
+  }
+  
+  /**
+   * 标记当前标签有变更
+   */
+  function markCurrentTabChanged() {
+    const currentTab = workflowTabs.value.find(t => t.id === activeTabId.value)
+    if (currentTab) {
+      currentTab.hasChanges = true
+    }
+  }
+  
+  /**
+   * 标记当前标签已保存
+   */
+  function markCurrentTabSaved(workflowId = null) {
+    const currentTab = workflowTabs.value.find(t => t.id === activeTabId.value)
+    if (currentTab) {
+      currentTab.hasChanges = false
+      if (workflowId) {
+        currentTab.workflowId = workflowId
+      }
+    }
+  }
+  
+  /**
+   * 在新标签中打开工作流
+   */
+  function openWorkflowInNewTab(workflow) {
+    // 检查是否已经在标签中打开
+    const existingTab = workflowTabs.value.find(t => t.workflowId === workflow.id)
+    if (existingTab) {
+      switchToTab(existingTab.id)
+      return existingTab
+    }
+    
+    // 创建新标签
+    return createTab(workflow)
+  }
+  
+  /**
+   * 初始化默认标签（如果没有标签时调用）
+   */
+  function initDefaultTab() {
+    if (workflowTabs.value.length === 0) {
+      createTab()
+    }
+  }
+  
+  /**
+   * 获取当前标签
+   */
+  function getCurrentTab() {
+    return workflowTabs.value.find(t => t.id === activeTabId.value)
+  }
+  
+  /**
+   * 合并工作流到当前画布（拖拽合并）
+   * @param {Object} workflow - 要合并的工作流数据
+   * @param {Object} dropPosition - 放置位置（画布坐标）
+   */
+  function mergeWorkflowToCanvas(workflow, dropPosition = { x: 100, y: 100 }) {
+    if (!workflow) return
+    
+    console.log('[Canvas] 合并工作流到画布:', workflow.name, '位置:', dropPosition)
+    
+    // 如果没有标签，先创建一个
+    if (workflowTabs.value.length === 0) {
+      createTab()
+    }
+    
+    saveHistory() // 保存历史用于撤销
+    
+    const workflowNodes = workflow.nodes || []
+    const workflowEdges = workflow.edges || []
+    
+    if (workflowNodes.length === 0) {
+      console.log('[Canvas] 工作流没有节点，跳过合并')
+      return
+    }
+    
+    // 计算工作流节点的边界框
+    let minX = Infinity, minY = Infinity
+    workflowNodes.forEach(node => {
+      if (node.position) {
+        minX = Math.min(minX, node.position.x)
+        minY = Math.min(minY, node.position.y)
+      }
+    })
+    
+    // 计算偏移量，使工作流放置到 dropPosition
+    const offsetX = dropPosition.x - minX
+    const offsetY = dropPosition.y - minY
+    
+    // ID 映射表（旧ID -> 新ID）
+    const idMap = {}
+    
+    // 添加节点（使用新的ID并应用偏移）
+    workflowNodes.forEach(node => {
+      const oldId = node.id
+      const newId = generateId()
+      idMap[oldId] = newId
+      
+      const newNode = {
+        ...node,
+        id: newId,
+        position: {
+          x: (node.position?.x || 0) + offsetX,
+          y: (node.position?.y || 0) + offsetY
+        }
+      }
+      
+      // 深拷贝 data
+      if (node.data) {
+        newNode.data = JSON.parse(JSON.stringify(node.data))
+      }
+      
+      nodes.value.push(newNode)
+    })
+    
+    // 添加连线（更新 source 和 target 为新ID）
+    workflowEdges.forEach(edge => {
+      const newSourceId = idMap[edge.source]
+      const newTargetId = idMap[edge.target]
+      
+      if (newSourceId && newTargetId) {
+        const newEdge = {
+          ...edge,
+          id: `edge-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          source: newSourceId,
+          target: newTargetId
+        }
+        edges.value.push(newEdge)
+      }
+    })
+    
+    // 标记当前标签有变更
+    markCurrentTabChanged()
+    
+    console.log('[Canvas] 合并完成，新增节点:', workflowNodes.length, '新增连线:', workflowEdges.length)
   }
   
   // ========== 工具函数 ==========
@@ -886,11 +1250,37 @@ export const useCanvasStore = defineStore('canvas', () => {
     endDragConnection,
     cancelDragConnection,
     
+    // 图片编辑模式
+    editingNodeId,
+    editTool,
+    editModeViewport,
+    isInEditMode,
+    enterEditMode,
+    exitEditMode,
+    switchEditTool,
+    
     // 工作流操作
     workflowMeta,
     clearCanvas,
     loadWorkflow,
     exportWorkflow,
+    
+    // 多标签操作
+    workflowTabs,
+    activeTabId,
+    maxTabs,
+    createTab,
+    switchToTab,
+    closeTab,
+    updateCurrentTabName,
+    updateTabName,
+    reorderTabs,
+    markCurrentTabChanged,
+    markCurrentTabSaved,
+    openWorkflowInNewTab,
+    initDefaultTab,
+    getCurrentTab,
+    mergeWorkflowToCanvas,
     
     // 工具函数
     getUpstreamNodes,

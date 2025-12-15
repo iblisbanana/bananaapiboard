@@ -17,11 +17,11 @@ const props = defineProps({
 const canvasStore = useCanvasStore()
 const userInfo = inject('userInfo')
 
-// LLM 类型配置
+// LLM 类型配置 - 黑白灰简洁风格
 const LLM_TYPES = {
   'llm-prompt-enhance': {
     label: '提示词优化',
-    icon: '✨',
+    icon: 'A+',
     description: 'AI 优化提示词，生成更专业的描述',
     inputType: 'text',
     outputType: 'text',
@@ -29,7 +29,7 @@ const LLM_TYPES = {
   },
   'llm-image-describe': {
     label: '图片描述',
-    icon: '🔍',
+    icon: '◎',
     description: '分析图片，生成详细提示词',
     inputType: 'image',
     outputType: 'text',
@@ -37,7 +37,7 @@ const LLM_TYPES = {
   },
   'llm-content-expand': {
     label: '内容扩写',
-    icon: '✎',
+    icon: '≡',
     description: 'AI 扩展内容，增加细节',
     inputType: 'text',
     outputType: 'text',
@@ -304,7 +304,7 @@ function handleAddClick(event) {
       
       <!-- 操作按钮 -->
       <div class="llm-actions">
-        <span class="points-cost">💎 {{ pointsCost }}</span>
+        <span class="points-cost">◆ {{ pointsCost }}</span>
         
         <button 
           v-if="!outputText"
@@ -312,7 +312,7 @@ function handleAddClick(event) {
           :disabled="!canExecute || data.status === 'processing'"
           @click="handleExecute"
         >
-          {{ data.status === 'processing' ? '⏳ 处理中' : '✨ 执行' }}
+          {{ data.status === 'processing' ? '...' : '→ 执行' }}
         </button>
         
         <button 
@@ -320,7 +320,7 @@ function handleAddClick(event) {
           class="canvas-node-btn secondary"
           @click="handleRedo"
         >
-          🔄 重新执行
+          ⟲ 重新执行
         </button>
       </div>
       
@@ -482,16 +482,17 @@ function handleAddClick(event) {
 
 .node-add-btn {
   position: absolute;
-  right: -12px;
+  right: -52px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
+  font-weight: 300;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -501,16 +502,16 @@ function handleAddClick(event) {
   z-index: 10;
 }
 
-.canvas-node:hover .node-add-btn {
+.canvas-node:hover .node-add-btn,
+.llm-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 /* 节点内容区域 */

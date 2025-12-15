@@ -30,6 +30,7 @@ import { canConnect } from '@/config/canvas/nodeTypes'
 import TextNode from './nodes/TextNode.vue'
 import ImageNode from './nodes/ImageNode.vue'
 import VideoNode from './nodes/VideoNode.vue'
+import AudioNode from './nodes/AudioNode.vue'
 import ImageGenNode from './nodes/ImageGenNode.vue'
 import VideoGenNode from './nodes/VideoGenNode.vue'
 import LLMNode from './nodes/LLMNode.vue'
@@ -133,6 +134,8 @@ const nodeTypes = {
   'text-input': TextNode,
   'image-input': ImageNode,       // 图片节点（上传+生成一体化）
   'video-input': VideoNode,       // 视频节点（上传+生成一体化）
+  'audio-input': AudioNode,       // 音频节点（上传音频）
+  'audio': AudioNode,             // 统一音频节点
   'image': ImageNode,             // 统一图片节点
   'video': VideoNode,             // 统一视频节点
   'image-gen': ImageNode,         // 兼容：图片生成映射到 ImageNode
@@ -323,21 +326,26 @@ function handleSelectionChange({ nodes }) {
   if (nodes.length === 1) {
     canvasStore.selectNode(nodes[0].id)
     console.log('[Canvas] 选中节点:', nodes[0].id, nodes[0].type)
-  } else if (nodes.length === 0) {
-    canvasStore.clearSelection()
-  } else {
+  } else if (nodes.length > 1) {
     // 多选时也更新 store（选中第一个作为主选中）
     canvasStore.selectNode(nodes[0].id)
   }
+  // 注意：不在 nodes.length === 0 时调用 clearSelection()
+  // 因为 VueFlow 可能在切换选择时先触发空选择事件
+  // 取消选择的逻辑由 onPaneClick 处理（点击空白区域）
 }
 
-// 处理节点点击 - 确保编组节点被正确选中
+// 处理节点点击 - 确保节点选中状态被正确更新
 onNodeClick((event) => {
   const node = event.node
-  console.log('[Canvas] 节点被点击:', node.id, node.type)
+  console.log('[Canvas] 节点被点击:', node.id, node.type, 'data:', node.data)
   
-  // 确保选中状态被正确更新
+  // 立即更新选中状态（确保工具栏能正确显示）
   canvasStore.selectNode(node.id)
+  
+  // 同时更新多选列表（单选情况）
+  selectedNodeIds.value = [node.id]
+  canvasStore.setSelectedNodeIds([node.id])
   
   // 关闭右键菜单
   canvasStore.closeAllContextMenus()
@@ -1041,7 +1049,9 @@ function handleFileDragOver(event) {
   event.preventDefault()
   event.stopPropagation()
   
-  if (event.dataTransfer?.types?.includes('Files')) {
+  // 支持文件拖拽和工作流拖拽
+  if (event.dataTransfer?.types?.includes('Files') || 
+      event.dataTransfer?.types?.includes('application/json')) {
     event.dataTransfer.dropEffect = 'copy'
   }
 }
@@ -1069,9 +1079,6 @@ async function handleFileDrop(event) {
   isFileDragOver.value = false
   fileDragCounter.value = 0
   
-  const files = event.dataTransfer?.files
-  if (!files || files.length === 0) return
-  
   // 获取放置位置的画布坐标
   const container = canvasBoardRef.value
   if (!container) return
@@ -1084,6 +1091,46 @@ async function handleFileDrop(event) {
   const viewport = getViewport()
   const canvasX = (mouseX - viewport.x) / viewport.zoom
   const canvasY = (mouseY - viewport.y) / viewport.zoom
+  
+  // 检查是否是工作流/模板拖拽（来自 WorkflowPanel）
+  const jsonData = event.dataTransfer?.getData('application/json')
+  if (jsonData) {
+    try {
+      const data = JSON.parse(jsonData)
+      
+      // 处理我的工作流拖拽
+      if (data.type === 'workflow-merge' && data.workflowId) {
+        console.log('[CanvasBoard] 接收到工作流拖放，加载并合并:', data.workflowName)
+        
+        // 异步加载工作流数据
+        import('@/api/canvas/workflow').then(async ({ loadWorkflow }) => {
+          try {
+            const result = await loadWorkflow(data.workflowId)
+            if (result.workflow) {
+              canvasStore.mergeWorkflowToCanvas(result.workflow, { x: canvasX, y: canvasY })
+            }
+          } catch (error) {
+            console.error('[CanvasBoard] 加载工作流失败:', error)
+            alert('加载工作流失败：' + error.message)
+          }
+        })
+        return
+      }
+      
+      // 处理模板拖拽（模板数据已经包含在 dataTransfer 中）
+      if (data.type === 'template-merge' && data.template) {
+        console.log('[CanvasBoard] 接收到模板拖放，合并:', data.template.name)
+        canvasStore.mergeWorkflowToCanvas(data.template, { x: canvasX, y: canvasY })
+        return
+      }
+    } catch (e) {
+      console.error('[CanvasBoard] 解析拖放数据失败:', e)
+    }
+  }
+  
+  // 处理文件拖放
+  const files = event.dataTransfer?.files
+  if (!files || files.length === 0) return
   
   // 处理每个文件
   let offsetX = 0
@@ -1360,8 +1407,8 @@ onUnmounted(() => {
   border-radius: 4px;
 }
 
-/* 被选中节点的高亮效果 */
-:deep(.vue-flow__node.selected) {
+/* 被选中节点的高亮效果（排除图片和视频节点，它们有自己的选中样式） */
+:deep(.vue-flow__node.selected:not([data-type="image-input"]):not([data-type="image"]):not([data-type="video"]):not([data-type="video-input"])) {
   box-shadow: 0 0 0 2px var(--canvas-accent-primary);
 }
 
@@ -1392,8 +1439,8 @@ onUnmounted(() => {
   stroke-width: 2;
 }
 
-/* 多选时的节点样式 */
-:deep(.vue-flow__node.selectable.selected) {
+/* 多选时的节点样式（排除图片和视频节点，它们有自己的选中样式） */
+:deep(.vue-flow__node.selectable.selected:not([data-type="image-input"]):not([data-type="image"]):not([data-type="video"]):not([data-type="video-input"])) {
   outline: 2px solid var(--canvas-accent-primary);
   outline-offset: 2px;
 }

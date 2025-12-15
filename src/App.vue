@@ -5,7 +5,11 @@ import { getMe } from '@/api/client'
 import { getTheme, toggleTheme as toggleThemeUtil } from '@/utils/theme'
 import { getTenantHeaders, getBrand, loadBrandConfig } from '@/config/tenant'
 import NotificationBar from '@/components/NotificationBar.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { formatPoints } from '@/utils/format'
+import { useI18n } from '@/i18n'
+
+const { t, currentLanguage } = useI18n()
 
 const me = ref(null)
 const route = useRoute()
@@ -104,11 +108,11 @@ onUnmounted(() => {
 })
 
 // 生成下拉菜单项
-const generateMenuItems = [
-  { path: '/generate', label: '图片生成', icon: '🎨' },
-  { path: '/video', label: '视频生成', icon: '🎬' },
-  { path: '/canvas', label: '创作画布（beta）', icon: '🎯' },
-]
+const generateMenuItems = computed(() => [
+  { path: '/generate', label: t('nav.imageGenerate'), icon: '🎨' },
+  { path: '/video', label: t('nav.videoGenerate'), icon: '🎬' },
+  { path: '/canvas', label: t('nav.canvasBeta'), icon: '🎯' },
+])
 
 const navItems = [
   // 其他导航项可以在这里添加
@@ -137,13 +141,13 @@ function closeMenus(e) {
 
 // 获取当前生成模式的标签
 const currentGenerateLabel = computed(() => {
-  const currentItem = generateMenuItems.find(item => item.path === route.path)
-  return currentItem ? currentItem.label : '生成'
+  const currentItem = generateMenuItems.value.find(item => item.path === route.path)
+  return currentItem ? currentItem.label : t('nav.generate')
 })
 
 // 获取当前生成模式的图标
 const currentGenerateIcon = computed(() => {
-  const currentItem = generateMenuItems.find(item => item.path === route.path)
+  const currentItem = generateMenuItems.value.find(item => item.path === route.path)
   return currentItem ? currentItem.icon : '🎨'
 })
 
@@ -200,8 +204,8 @@ async function copyInviteLink() {
 
 <template>
   <div class="min-h-screen flex flex-col">
-    <!-- 导航栏 - 落地页和画布页不显示 -->
-    <nav v-if="route.path !== '/' && route.path !== '/canvas'" class="glass sticky top-0 z-50 border-b border-slate-200/50 dark:border-dark-600/50">
+    <!-- 导航栏 - 落地页、画布页和工作流页不显示 -->
+    <nav v-if="route.path !== '/' && route.path !== '/canvas' && route.path !== '/workflows'" class="glass sticky top-0 z-50 border-b border-slate-200/50 dark:border-dark-600/50">
       <div class="mx-auto" 
         :class="isWidescreenMode && route.path === '/' ? 'px-0' : 'max-w-7xl px-4 sm:px-6 lg:px-8'">
         <div class="flex justify-between items-center h-16"
@@ -276,7 +280,7 @@ async function copyInviteLink() {
               class="nav-link flex items-center"
             >
               <span class="mr-2">💎</span>
-              购买套餐
+              {{ t('nav.packages') }}
             </RouterLink>
             
             <!-- 兑换券入口 -->
@@ -286,20 +290,20 @@ async function copyInviteLink() {
               class="nav-link flex items-center"
             >
               <span class="mr-2">🎫</span>
-              兑换券入口
+              {{ t('nav.voucher') }}
             </button>
             
             <!-- 积分和余额显示 -->
             <div v-if="me" class="ml-4 flex items-center space-x-2">
               <!-- 套餐积分 -->
-              <div class="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 rounded-full text-white text-sm font-medium shadow-lg hover:shadow-xl transition-shadow" :title="`套餐内剩余积分（会到期）`">
+              <div class="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 rounded-full text-white text-sm font-medium shadow-lg hover:shadow-xl transition-shadow" :title="t('user.packagePointsDesc')">
                 <span class="mr-1">💎</span>
-                {{ formatPoints(me.package_points) }} 积分
+                {{ formatPoints(me.package_points) }} {{ t('user.points') }}
               </div>
               <!-- 永久积分 -->
-              <div class="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-full text-white text-sm font-medium shadow-lg hover:shadow-xl transition-shadow" :title="`永久积分（永不过期）`">
+              <div class="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-full text-white text-sm font-medium shadow-lg hover:shadow-xl transition-shadow" :title="t('user.permanentPointsDesc')">
                 <span class="mr-1">⭐</span>
-                {{ formatPoints(me.points) }} 积分
+                {{ formatPoints(me.points) }} {{ t('user.points') }}
               </div>
               <!-- 余额 -->
               <div class="px-3 py-1.5 bg-gradient-to-r from-green-500 to-green-600 rounded-full text-white text-sm font-medium shadow-lg">
@@ -308,11 +312,14 @@ async function copyInviteLink() {
               </div>
             </div>
 
+            <!-- 语言切换 -->
+            <LanguageSwitcher :isDark="currentTheme === 'dark'" />
+            
             <!-- 主题切换按钮 -->
             <button
               @click="toggleTheme"
               class="ml-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-dark-600 transition-colors"
-              :title="currentTheme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
+              :title="currentTheme === 'dark' ? t('nav.switchToLightMode') : t('nav.switchToDarkMode')"
             >
               <span v-if="currentTheme === 'dark'" class="text-xl">🌙</span>
               <span v-else class="text-xl">☀️</span>
@@ -326,7 +333,7 @@ async function copyInviteLink() {
                 :class="{ active: isActive('/user') || isActive('/adminboard') }"
               >
                 <span class="mr-2">⚡</span>
-                我的
+                {{ t('nav.my') }}
                 <svg class="w-4 h-4 ml-1 transition-transform" :class="{ 'rotate-180': isUserMenuOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
                 </svg>
@@ -350,7 +357,7 @@ async function copyInviteLink() {
                     @click="isUserMenuOpen = false"
                   >
                     <span class="mr-3">👤</span>
-                    个人中心
+                    {{ t('nav.user') }}
                   </RouterLink>
                   
                   <button
@@ -359,7 +366,7 @@ async function copyInviteLink() {
                     :class="copySuccess ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-dark-600'"
                   >
                     <span class="mr-3">{{ copySuccess ? '✅' : '🎉' }}</span>
-                    {{ copySuccess ? '复制成功！' : '复制邀请链接' }}
+                    {{ copySuccess ? t('nav.copySuccess') : t('nav.copyInviteLink') }}
                   </button>
                   
                   <RouterLink
@@ -369,7 +376,7 @@ async function copyInviteLink() {
                     @click="isUserMenuOpen = false"
                   >
                     <span class="mr-3">🔧</span>
-                    管理后台
+                    {{ t('nav.admin') }}
                   </RouterLink>
                   
                   <div class="border-t border-slate-200 dark:border-dark-600 my-2"></div>
@@ -379,7 +386,7 @@ async function copyInviteLink() {
                     class="w-full flex items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                   >
                     <span class="mr-3">🚪</span>
-                    退出登录
+                    {{ t('nav.logout') }}
                   </button>
                 </template>
 
@@ -391,7 +398,7 @@ async function copyInviteLink() {
                     @click="isUserMenuOpen = false"
                   >
                     <span class="mr-3">🔑</span>
-                    登录 / 注册
+                    {{ t('nav.loginOrRegister') }}
                   </RouterLink>
                 </template>
               </div>
@@ -417,7 +424,7 @@ async function copyInviteLink() {
         <div class="px-4 py-3 space-y-2">
           <!-- 生成菜单项 -->
           <div class="space-y-1">
-            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 px-2">生成</div>
+            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 px-2">{{ t('nav.generate') }}</div>
             <RouterLink
               v-for="item in generateMenuItems"
               :key="item.path"
@@ -452,7 +459,7 @@ async function copyInviteLink() {
             @click="isMenuOpen = false"
           >
             <span class="mr-2">💎</span>
-            购买套餐
+            {{ t('nav.packages') }}
           </RouterLink>
           
           <!-- 移动端兑换券入口 -->
@@ -462,51 +469,56 @@ async function copyInviteLink() {
             class="w-full text-left nav-link"
           >
             <span class="mr-2">🎫</span>
-            兑换券入口
+            {{ t('nav.voucher') }}
           </button>
           
           <!-- 移动端积分和余额显示 -->
           <div v-if="me" class="pt-2 mt-2 border-t border-slate-200/50 dark:border-dark-600/50 space-y-2">
             <div class="px-3 py-2 bg-gradient-to-r from-amber-500 to-amber-600 rounded-lg text-white text-sm font-medium shadow-lg">
               <div class="flex items-center justify-between">
-                <span><span class="mr-1">💎</span>套餐积分</span>
+                <span><span class="mr-1">💎</span>{{ t('user.packagePoints') }}</span>
                 <span class="font-bold">{{ formatPoints(me.package_points) }}</span>
               </div>
               <div class="text-xs opacity-90 mt-1">
-                套餐内剩余积分（会到期）
+                {{ t('user.packagePointsDesc') }}
               </div>
             </div>
             <div class="px-3 py-2 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg text-white text-sm font-medium shadow-lg">
               <div class="flex items-center justify-between">
-                <span><span class="mr-1">⭐</span>永久积分</span>
+                <span><span class="mr-1">⭐</span>{{ t('user.permanentPoints') }}</span>
                 <span class="font-bold">{{ formatPoints(me.points) }}</span>
               </div>
               <div class="text-xs opacity-90 mt-1">
-                永久积分（永不过期）
+                {{ t('user.permanentPointsDesc') }}
               </div>
             </div>
             <div class="px-3 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-lg text-white text-sm font-medium shadow-lg">
               <div class="flex items-center justify-between">
-                <span><span class="mr-1">💰</span>余额</span>
+                <span><span class="mr-1">💰</span>{{ t('user.balance') }}</span>
                 <span class="font-bold">¥{{ ((me.balance || 0) / 100).toFixed(2) }}</span>
               </div>
             </div>
           </div>
 
-          <!-- 移动端主题切换 -->
-          <div class="pt-2 mt-2 border-t border-slate-200/50 dark:border-dark-600/50">
+          <!-- 移动端语言和主题切换 -->
+          <div class="pt-2 mt-2 border-t border-slate-200/50 dark:border-dark-600/50 space-y-2">
+            <!-- 语言切换 -->
+            <div class="px-2">
+              <LanguageSwitcher :isDark="currentTheme === 'dark'" />
+            </div>
+            
             <button
               @click="toggleTheme"
               class="w-full flex items-center px-4 py-2 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-dark-600 transition-colors"
             >
               <span class="mr-3">{{ currentTheme === 'dark' ? '🌙' : '☀️' }}</span>
-              {{ currentTheme === 'dark' ? '深色模式' : '浅色模式' }}
+              {{ currentTheme === 'dark' ? t('nav.darkMode') : t('nav.lightMode') }}
             </button>
           </div>
 
           <!-- 移动端我的菜单 -->
           <div class="pt-2 mt-2 border-t border-slate-200/50 dark:border-dark-600/50">
-            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 px-2">我的</div>
+            <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 px-2">{{ t('nav.my') }}</div>
             
             <!-- 已登录状态 -->
             <template v-if="me">
@@ -522,7 +534,7 @@ async function copyInviteLink() {
                 @click="isMenuOpen = false"
               >
                 <span class="mr-2">👤</span>
-                个人中心
+                {{ t('nav.user') }}
               </RouterLink>
               
               <button
@@ -531,7 +543,7 @@ async function copyInviteLink() {
                 :class="copySuccess ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20' : ''"
               >
                 <span class="mr-2">{{ copySuccess ? '✅' : '🎉' }}</span>
-                {{ copySuccess ? '复制成功！' : '复制邀请链接' }}
+                {{ copySuccess ? t('nav.copySuccess') : t('nav.copyInviteLink') }}
               </button>
               
               <RouterLink
@@ -542,7 +554,7 @@ async function copyInviteLink() {
                 @click="isMenuOpen = false"
               >
                 <span class="mr-2">🔧</span>
-                管理后台
+                {{ t('nav.admin') }}
               </RouterLink>
               
               <button
@@ -550,7 +562,7 @@ async function copyInviteLink() {
                 class="w-full text-left nav-link text-red-600 dark:text-red-400 mt-2"
               >
                 <span class="mr-2">🚪</span>
-                退出登录
+                {{ t('nav.logout') }}
               </button>
             </template>
 
@@ -563,7 +575,7 @@ async function copyInviteLink() {
                 @click="isMenuOpen = false"
               >
                 <span class="mr-2">🔑</span>
-                登录 / 注册
+                {{ t('nav.loginOrRegister') }}
               </RouterLink>
             </template>
           </div>
@@ -571,16 +583,16 @@ async function copyInviteLink() {
       </div>
     </nav>
 
-    <!-- 通知栏 - 落地页和画布页不显示 -->
-    <NotificationBar v-if="route.path !== '/' && route.path !== '/canvas'" />
+    <!-- 通知栏 - 落地页、画布页和工作流页不显示 -->
+    <NotificationBar v-if="route.path !== '/' && route.path !== '/canvas' && route.path !== '/workflows'" />
 
     <!-- 主内容区 -->
     <main class="flex-1">
       <RouterView />
     </main>
     
-    <!-- 底部备案号 - 固定在页面最底部，落地页和画布页不显示 -->
-    <footer v-if="route.path !== '/' && route.path !== '/canvas' && icpConfig.enabled && icpConfig.icp_number" class="py-3 text-center border-t border-slate-200/50 dark:border-dark-600/50 bg-slate-50/80 dark:bg-dark-800/80 mt-auto">
+    <!-- 底部备案号 - 固定在页面最底部，落地页、画布页和工作流页不显示 -->
+    <footer v-if="route.path !== '/' && route.path !== '/canvas' && route.path !== '/workflows' && icpConfig.enabled && icpConfig.icp_number" class="py-3 text-center border-t border-slate-200/50 dark:border-dark-600/50 bg-slate-50/80 dark:bg-dark-800/80 mt-auto">
       <a 
         :href="icpConfig.icp_link || 'https://beian.miit.gov.cn/'" 
         target="_blank" 

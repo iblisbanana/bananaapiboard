@@ -9,6 +9,7 @@ export const NODE_TYPES = {
   TEXT_INPUT: 'text-input',
   IMAGE_INPUT: 'image-input',
   VIDEO_INPUT: 'video-input',
+  AUDIO_INPUT: 'audio-input',
   
   // 生成类
   TEXT_TO_IMAGE: 'text-to-image',
@@ -34,12 +35,13 @@ export const NODE_TYPES = {
   GRID_PREVIEW: 'grid-preview'
 }
 
-// 节点类型配置
+// 节点类型配置 - 黑白灰简洁风格图标
+// 注意：label 和 description 使用 i18n 翻译键
 export const NODE_TYPE_CONFIG = {
   [NODE_TYPES.TEXT_INPUT]: {
-    label: '文本',
-    description: '脚本、广告词、品牌文案',
-    icon: 'T',
+    label: 'canvas.nodeConfig.textInput.label',
+    description: 'canvas.nodeConfig.textInput.desc',
+    icon: 'Aa',
     category: 'input',
     color: '#3b82f6',
     hasInput: false,
@@ -48,9 +50,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.IMAGE_INPUT]: {
-    label: '图片',
-    description: '上传参考图片',
-    icon: '🖼',
+    label: 'canvas.nodeConfig.imageInput.label',
+    description: 'canvas.nodeConfig.imageInput.desc',
+    icon: '◫',
     category: 'input',
     color: '#22c55e',
     hasInput: false,
@@ -59,9 +61,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.VIDEO_INPUT]: {
-    label: '视频',
-    description: '上传参考视频',
-    icon: '🎬',
+    label: 'canvas.nodeConfig.videoInput.label',
+    description: 'canvas.nodeConfig.videoInput.desc',
+    icon: '▷',
     category: 'input',
     color: '#f59e0b',
     hasInput: false,
@@ -69,10 +71,21 @@ export const NODE_TYPE_CONFIG = {
     outputType: 'video'
   },
   
+  [NODE_TYPES.AUDIO_INPUT]: {
+    label: 'canvas.nodeConfig.audioInput.label',
+    description: 'canvas.nodeConfig.audioInput.desc',
+    icon: '♪',
+    category: 'input',
+    color: '#a855f7',
+    hasInput: false,
+    hasOutput: true,
+    outputType: 'audio'
+  },
+  
   [NODE_TYPES.TEXT_TO_IMAGE]: {
-    label: '文生图',
-    description: '文本生成图片',
-    icon: '🎨',
+    label: 'canvas.nodeConfig.textToImage.label',
+    description: 'canvas.nodeConfig.textToImage.desc',
+    icon: '⬡',
     category: 'generate',
     color: '#8b5cf6',
     hasInput: true,
@@ -83,9 +96,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.IMAGE_TO_IMAGE]: {
-    label: '图生图',
-    description: '图片风格转换',
-    icon: '🔄',
+    label: 'canvas.nodeConfig.imageToImage.label',
+    description: 'canvas.nodeConfig.imageToImage.desc',
+    icon: '⟲',
     category: 'generate',
     color: '#ec4899',
     hasInput: true,
@@ -96,9 +109,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.TEXT_TO_VIDEO]: {
-    label: '文生视频',
-    description: '文本生成视频',
-    icon: '📹',
+    label: 'canvas.nodeConfig.textToVideo.label',
+    description: 'canvas.nodeConfig.textToVideo.desc',
+    icon: '▶',
     category: 'generate',
     color: '#f97316',
     hasInput: true,
@@ -109,9 +122,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.IMAGE_TO_VIDEO]: {
-    label: '图生视频',
-    description: '图片生成视频',
-    icon: '🎥',
+    label: 'canvas.nodeConfig.imageToVideo.label',
+    description: 'canvas.nodeConfig.imageToVideo.desc',
+    icon: '◈',
     category: 'generate',
     color: '#ef4444',
     hasInput: true,
@@ -122,9 +135,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.LLM_PROMPT_ENHANCE]: {
-    label: '提示词优化',
-    description: 'AI 优化提示词',
-    icon: '✨',
+    label: 'canvas.nodeConfig.promptEnhance.label',
+    description: 'canvas.nodeConfig.promptEnhance.desc',
+    icon: 'A+',
     category: 'llm',
     color: '#06b6d4',
     hasInput: true,
@@ -136,9 +149,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.LLM_IMAGE_DESCRIBE]: {
-    label: '图片描述',
-    description: '图片反推提示词',
-    icon: '🔍',
+    label: 'canvas.nodeConfig.imageDescribe.label',
+    description: 'canvas.nodeConfig.imageDescribe.desc',
+    icon: '◎',
     category: 'llm',
     color: '#14b8a6',
     hasInput: true,
@@ -150,9 +163,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.LLM_CONTENT_EXPAND]: {
-    label: '内容扩写',
-    description: 'AI 内容扩写',
-    icon: '📝',
+    label: 'canvas.nodeConfig.contentExpand.label',
+    description: 'canvas.nodeConfig.contentExpand.desc',
+    icon: '≡',
     category: 'llm',
     color: '#0ea5e9',
     hasInput: true,
@@ -164,9 +177,9 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.LLM_STORYBOARD]: {
-    label: '分镜脚本',
-    description: '生成分镜脚本',
-    icon: '🎬',
+    label: 'canvas.nodeConfig.storyboard.label',
+    description: 'canvas.nodeConfig.storyboard.desc',
+    icon: '⊞',
     category: 'llm',
     color: '#6366f1',
     hasInput: true,
@@ -178,14 +191,91 @@ export const NODE_TYPE_CONFIG = {
   },
   
   [NODE_TYPES.PREVIEW_OUTPUT]: {
-    label: '预览输出',
-    description: '展示最终结果',
-    icon: '👁',
+    label: 'canvas.nodeConfig.previewOutput.label',
+    description: 'canvas.nodeConfig.previewOutput.desc',
+    icon: '◉',
     category: 'output',
     color: '#64748b',
     hasInput: true,
     hasOutput: false,
     inputType: 'any'
+  },
+  
+  // 图片编辑类节点配置
+  [NODE_TYPES.IMAGE_REPAINT]: {
+    label: 'canvas.nodeConfig.imageRepaint.label',
+    description: 'canvas.nodeConfig.imageRepaint.desc',
+    icon: '✎',
+    category: 'edit',
+    color: '#f472b6',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'image',
+    outputType: 'image',
+    consumesPoints: true
+  },
+  
+  [NODE_TYPES.IMAGE_ERASE]: {
+    label: 'canvas.nodeConfig.imageErase.label',
+    description: 'canvas.nodeConfig.imageErase.desc',
+    icon: '⌫',
+    category: 'edit',
+    color: '#fb923c',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'image',
+    outputType: 'image',
+    consumesPoints: true
+  },
+  
+  [NODE_TYPES.IMAGE_UPSCALE]: {
+    label: 'canvas.nodeConfig.imageUpscale.label',
+    description: 'canvas.nodeConfig.imageUpscale.desc',
+    icon: '⇧',
+    category: 'edit',
+    color: '#a78bfa',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'image',
+    outputType: 'image',
+    consumesPoints: true
+  },
+  
+  [NODE_TYPES.IMAGE_CUTOUT]: {
+    label: 'canvas.nodeConfig.imageCutout.label',
+    description: 'canvas.nodeConfig.imageCutout.desc',
+    icon: '✂',
+    category: 'edit',
+    color: '#4ade80',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'image',
+    outputType: 'image',
+    consumesPoints: true
+  },
+  
+  [NODE_TYPES.IMAGE_EXPAND]: {
+    label: 'canvas.nodeConfig.imageExpand.label',
+    description: 'canvas.nodeConfig.imageExpand.desc',
+    icon: '⇔',
+    category: 'edit',
+    color: '#38bdf8',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'image',
+    outputType: 'image',
+    consumesPoints: true
+  },
+  
+  [NODE_TYPES.GRID_PREVIEW]: {
+    label: 'canvas.nodeConfig.gridPreview.label',
+    description: 'canvas.nodeConfig.gridPreview.desc',
+    icon: '⊞',
+    category: 'output',
+    color: '#94a3b8',
+    hasInput: true,
+    hasOutput: false,
+    inputType: 'image'
   }
 }
 
@@ -211,27 +301,30 @@ export const CONNECTION_RULES = {
   ],
   
   [NODE_TYPES.IMAGE_INPUT]: [
-    NODE_TYPES.IMAGE_TO_IMAGE,
-    NODE_TYPES.IMAGE_TO_VIDEO,
-    NODE_TYPES.LLM_IMAGE_DESCRIBE,
-    NODE_TYPES.IMAGE_REPAINT,
-    NODE_TYPES.IMAGE_ERASE,
-    NODE_TYPES.IMAGE_UPSCALE,
-    NODE_TYPES.IMAGE_CUTOUT,
-    NODE_TYPES.IMAGE_EXPAND,
+    NODE_TYPES.IMAGE_TO_IMAGE,      // 图生图
+    NODE_TYPES.IMAGE_TO_VIDEO,      // 图生视频
+    NODE_TYPES.LLM_IMAGE_DESCRIBE,  // 图片反推/描述
+    NODE_TYPES.LLM_STORYBOARD,      // 图生分镜
+    NODE_TYPES.IMAGE_UPSCALE,       // 超分放大
+    NODE_TYPES.IMAGE_CUTOUT,        // 智能抠图
+    NODE_TYPES.IMAGE_REPAINT,       // 局部重绘
+    NODE_TYPES.IMAGE_ERASE,         // 智能擦除
+    NODE_TYPES.IMAGE_EXPAND,        // 图片扩展
     NODE_TYPES.PREVIEW_OUTPUT
   ],
   
   // 统一图片节点别名（上传的图片、生成的图片都可以继续向下连接）
+  // 按使用频率排序：图生图、图生视频、图片反推、分镜脚本...
   'image': [
-    NODE_TYPES.IMAGE_TO_IMAGE,
-    NODE_TYPES.IMAGE_TO_VIDEO,
-    NODE_TYPES.LLM_IMAGE_DESCRIBE,
-    NODE_TYPES.IMAGE_REPAINT,
-    NODE_TYPES.IMAGE_ERASE,
-    NODE_TYPES.IMAGE_UPSCALE,
-    NODE_TYPES.IMAGE_CUTOUT,
-    NODE_TYPES.IMAGE_EXPAND,
+    NODE_TYPES.IMAGE_TO_IMAGE,      // 图生图
+    NODE_TYPES.IMAGE_TO_VIDEO,      // 图生视频
+    NODE_TYPES.LLM_IMAGE_DESCRIBE,  // 图片反推/描述
+    NODE_TYPES.LLM_STORYBOARD,      // 图生分镜
+    NODE_TYPES.IMAGE_UPSCALE,       // 超分放大
+    NODE_TYPES.IMAGE_CUTOUT,        // 智能抠图
+    NODE_TYPES.IMAGE_REPAINT,       // 局部重绘
+    NODE_TYPES.IMAGE_ERASE,         // 智能擦除
+    NODE_TYPES.IMAGE_EXPAND,        // 图片扩展
     NODE_TYPES.PREVIEW_OUTPUT
   ],
   
@@ -244,6 +337,19 @@ export const CONNECTION_RULES = {
   ],
   
   [NODE_TYPES.VIDEO_INPUT]: [
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  [NODE_TYPES.AUDIO_INPUT]: [
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  // 统一音频节点别名
+  'audio': [
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  'audio-input': [
     NODE_TYPES.PREVIEW_OUTPUT
   ],
   
@@ -307,6 +413,32 @@ export const CONNECTION_RULES = {
     NODE_TYPES.TEXT_TO_IMAGE,
     NODE_TYPES.PREVIEW_OUTPUT,
     NODE_TYPES.GRID_PREVIEW
+  ],
+  
+  // 图片编辑类节点的下游选项
+  [NODE_TYPES.IMAGE_REPAINT]: [
+    NODE_TYPES.IMAGE_TO_VIDEO,
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  [NODE_TYPES.IMAGE_ERASE]: [
+    NODE_TYPES.IMAGE_TO_VIDEO,
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  [NODE_TYPES.IMAGE_UPSCALE]: [
+    NODE_TYPES.IMAGE_TO_VIDEO,
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  [NODE_TYPES.IMAGE_CUTOUT]: [
+    NODE_TYPES.IMAGE_TO_VIDEO,
+    NODE_TYPES.PREVIEW_OUTPUT
+  ],
+  
+  [NODE_TYPES.IMAGE_EXPAND]: [
+    NODE_TYPES.IMAGE_TO_VIDEO,
+    NODE_TYPES.PREVIEW_OUTPUT
   ]
 }
 
@@ -314,7 +446,7 @@ export const CONNECTION_RULES = {
 export const NODE_CATEGORIES = {
   input: {
     label: '添加节点',
-    types: [NODE_TYPES.TEXT_INPUT, NODE_TYPES.IMAGE_INPUT, NODE_TYPES.VIDEO_INPUT]
+    types: [NODE_TYPES.TEXT_INPUT, NODE_TYPES.IMAGE_INPUT, NODE_TYPES.VIDEO_INPUT, NODE_TYPES.AUDIO_INPUT]
   },
   generate: {
     label: '生成',
@@ -441,6 +573,17 @@ export const UPSTREAM_RULES = {
     NODE_TYPES.IMAGE_INPUT,
     NODE_TYPES.TEXT_TO_IMAGE,
     NODE_TYPES.IMAGE_TO_IMAGE
+  ],
+  
+  // 分镜脚本节点：可以接收文本和图片（图片会先转为描述再生成分镜）
+  [NODE_TYPES.LLM_STORYBOARD]: [
+    NODE_TYPES.TEXT_INPUT,
+    NODE_TYPES.IMAGE_INPUT,
+    NODE_TYPES.TEXT_TO_IMAGE,
+    NODE_TYPES.IMAGE_TO_IMAGE,
+    NODE_TYPES.LLM_PROMPT_ENHANCE,
+    NODE_TYPES.LLM_IMAGE_DESCRIBE,
+    NODE_TYPES.LLM_CONTENT_EXPAND
   ],
   
   // 预览输出节点：可以接收任何类型

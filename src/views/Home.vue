@@ -8,6 +8,7 @@ import PromptInputWithTags from '@/components/PromptInputWithTags.vue'
 import { labelToPromptText, indexToLabel } from '@/utils/imageAnnotation'
 import { getTenantHeaders, getModelDisplayName } from '@/config/tenant'
 import { shouldHistoryDrawerOpenByDefault } from '@/utils/deviceDetection'
+import VirtualList from 'vue3-virtual-scroll-list'
 
 const prompt = ref('')
 const model = ref('nano-banana-2') // 默认使用 Nano Banana 2
@@ -612,7 +613,7 @@ function playNotificationSound() {
   }
 }
 
-// 加载历史记录
+// 加载历史记录（虚拟滚动：一次性加载所有）
 async function loadHistory() {
   try {
     const token = localStorage.getItem('token')
@@ -3015,7 +3016,7 @@ onUnmounted(() => {
         <!-- 抽屉底部 -->
         <div class="p-3 border-t border-slate-200 dark:border-dark-600 bg-slate-50 dark:bg-dark-700/50">
           <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-            <span>最近50条</span>
+            <span>共 {{ history.length }} 条</span>
             <span>保留7天</span>
           </div>
         </div>

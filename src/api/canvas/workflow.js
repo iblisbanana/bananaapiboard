@@ -14,16 +14,25 @@ function getApiBase() {
 }
 
 /**
+ * 获取带认证的请求头（包含用户token和租户信息）
+ */
+function getAuthHeaders() {
+  const token = localStorage.getItem('token')
+  return {
+    'Content-Type': 'application/json',
+    ...getTenantHeaders(),
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  }
+}
+
+/**
  * 获取用户存储配额
  */
 export async function getStorageQuota() {
   const response = await fetch(`${getApiBase()}/api/canvas/storage/quota`, {
     method: 'GET',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
@@ -41,10 +50,7 @@ export async function saveWorkflow(workflowData) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows`, {
     method: 'POST',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify(workflowData)
   })
   
@@ -81,10 +87,7 @@ export async function loadWorkflow(workflowId) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}`, {
     method: 'GET',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
@@ -110,10 +113,7 @@ export async function getWorkflowList(params = {}) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows?${queryParams}`, {
     method: 'GET',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
@@ -131,15 +131,31 @@ export async function deleteWorkflow(workflowId) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}`, {
     method: 'DELETE',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
     const error = await response.json()
     throw new Error(error.error || '删除失败')
+  }
+  
+  return response.json()
+}
+
+/**
+ * 重命名工作流
+ */
+export async function renameWorkflow(workflowId, newName) {
+  const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}/rename`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ name: newName })
+  })
+  
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(error.error || '重命名失败')
   }
   
   return response.json()
@@ -152,10 +168,7 @@ export async function getWorkflowVersions(workflowId) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}/versions`, {
     method: 'GET',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
@@ -173,10 +186,7 @@ export async function getWorkflowTemplates() {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows/templates`, {
     method: 'GET',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    }
+    headers: getAuthHeaders()
   })
   
   if (!response.ok) {
@@ -194,10 +204,7 @@ export async function restoreWorkflowVersion(workflowId, versionNumber) {
   const response = await fetch(`${getApiBase()}/api/canvas/workflows/${workflowId}/restore`, {
     method: 'POST',
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...getTenantHeaders()
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ versionNumber })
   })
   

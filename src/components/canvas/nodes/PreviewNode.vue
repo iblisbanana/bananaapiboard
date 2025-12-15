@@ -53,12 +53,12 @@ function fullscreen() {
     <!-- 节点头部 -->
     <div class="canvas-node-header">
       <div class="canvas-node-title">
-        <span class="icon">👁</span>
+        <span class="icon">◉</span>
         {{ data.title || '预览输出' }}
       </div>
       <div class="canvas-node-actions">
-        <button class="canvas-node-action-btn" title="下载" @click="download">⬇️</button>
-        <button class="canvas-node-action-btn" title="全屏" @click="fullscreen">↔️</button>
+        <button class="canvas-node-action-btn" title="下载" @click="download">↓</button>
+        <button class="canvas-node-action-btn" title="全屏" @click="fullscreen">⤢</button>
       </div>
     </div>
     

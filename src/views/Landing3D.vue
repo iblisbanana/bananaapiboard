@@ -1,13 +1,18 @@
 <template>
   <div class="landing-wrapper" ref="wrapper">
+    <!-- 语言切换按钮 - 固定在右上角 -->
+    <div class="language-switcher-container">
+      <LanguageSwitcher :isDark="true" direction="down" />
+    </div>
+    
     <div class="landing-container" ref="container">
       <canvas ref="canvas" class="webgl-canvas"></canvas>
       
       <!-- UI Overlay -->
       <div class="ui-overlay">
         <div class="side-text left">
-          <span class="text-glow">AI DESIGN UNLEASHED</span>
-          <span class="text-sub">释放人工智能设计潜能</span>
+          <span class="text-glow">{{ t('landing.slogan') }}</span>
+          <span class="text-sub">{{ t('landing.sloganSub') }}</span>
         </div>
         
         <div class="center-content">
@@ -27,15 +32,15 @@
             <div class="btn-glow-outer"></div>
             <div class="btn-glow-inner"></div>
             <div class="btn-glass">
-              <span class="btn-text">TRY IT NOW</span>
+              <span class="btn-text">{{ t('landing.tryItNow') }}</span>
             </div>
             <div class="btn-shine"></div>
           </button>
         </div>
         
         <div class="side-text right">
-          <span class="text-glow">FUTURE IS NOW</span>
-          <span class="text-sub">未来已来</span>
+          <span class="text-glow">{{ t('landing.futureIsNow') }}</span>
+          <span class="text-sub">{{ t('landing.futureIsNowSub') }}</span>
         </div>
       </div>
 
@@ -46,10 +51,10 @@
       <canvas ref="canvasTech" class="webgl-canvas-section"></canvas>
       <div class="section-content">
         <h2 class="section-title">
-          <span class="title-glow">POWERED BY</span>
-          <span class="title-main">CUTTING-EDGE AI</span>
+          <span class="title-glow">{{ t('landing.poweredBy') }}</span>
+          <span class="title-main">{{ t('landing.cuttingEdgeAI') }}</span>
         </h2>
-        <p class="section-desc">融合最前沿的人工智能技术</p>
+        <p class="section-desc">{{ t('landing.techDesc') }}</p>
         <div class="tech-grid">
           <div class="tech-item">
             <div class="tech-ring"></div>
@@ -80,11 +85,11 @@
       <canvas ref="canvasCta" class="webgl-canvas-section"></canvas>
       <div class="section-content cta-content">
         <h2 class="section-title large">
-          <span class="title-main">START YOUR JOURNEY</span>
+          <span class="title-main">{{ t('landing.startYourJourney') }}</span>
         </h2>
-        <p class="section-desc">立即加入，开启AI创作之旅</p>
+        <p class="section-desc">{{ t('landing.joinNow') }}</p>
         <button class="cta-button-final" @click="handleCTAClick">
-          <span class="btn-text-final">立即体验</span>
+          <span class="btn-text-final">{{ t('landing.tryNow') }}</span>
           <span class="btn-arrow">→</span>
         </button>
       </div>
@@ -105,28 +110,28 @@
             <div class="modal-logo-ring">
               <span class="logo-text">AI</span>
             </div>
-            <h2 class="modal-title">{{ authMode === 'login' ? '欢迎回来' : '开启创作之旅' }}</h2>
-            <p class="modal-subtitle">{{ authMode === 'login' ? '登录您的账户' : '注册获取免费积分' }}</p>
+            <h2 class="modal-title">{{ authMode === 'login' ? t('auth.welcomeBack') : t('auth.startJourney') }}</h2>
+            <p class="modal-subtitle">{{ authMode === 'login' ? t('auth.loginAccount') : t('auth.registerFreePoints') }}</p>
           </div>
 
           <div class="auth-toggle">
-            <button :class="['toggle-btn', { active: authMode === 'login' }]" @click="authMode = 'login'">登录</button>
-            <button :class="['toggle-btn', { active: authMode === 'register' }]" @click="authMode = 'register'">注册</button>
+            <button :class="['toggle-btn', { active: authMode === 'login' }]" @click="authMode = 'login'">{{ t('auth.login') }}</button>
+            <button :class="['toggle-btn', { active: authMode === 'register' }]" @click="authMode = 'register'">{{ t('auth.register') }}</button>
             <div class="toggle-indicator" :style="{ transform: authMode === 'register' ? 'translateX(100%)' : 'translateX(0)' }"></div>
           </div>
 
           <form @submit.prevent="submitAuth" class="auth-form">
             <!-- 注册模式且有白名单：显示用户名和邮箱分开的输入 -->
             <div v-if="authMode === 'register' && emailConfig.has_whitelist && emailConfig.email_whitelist.length > 0" class="form-group">
-              <input v-model="account" type="text" class="form-input" placeholder="用户名" required />
+              <input v-model="account" type="text" class="form-input" :placeholder="t('auth.username')" required />
             </div>
 
             <div v-if="authMode === 'register' && emailConfig.has_whitelist && emailConfig.email_whitelist.length > 0" class="form-group">
               <div class="email-input-group">
-                <input v-model="emailPrefix" type="text" class="form-input email-prefix" placeholder="邮箱前缀" required />
+                <input v-model="emailPrefix" type="text" class="form-input email-prefix" :placeholder="t('auth.emailPrefix')" required />
                 <span class="email-at">@</span>
                 <select v-model="emailSuffix" class="form-input email-suffix" required>
-                  <option value="" disabled>选择后缀</option>
+                  <option value="" disabled>{{ t('auth.selectSuffix') }}</option>
                   <option v-for="domain in emailConfig.email_whitelist" :key="domain" :value="domain">
                     {{ domain }}
                   </option>
@@ -136,11 +141,11 @@
 
             <!-- 其他模式：显示原来的邮箱/登录名输入框 -->
             <div v-if="!(authMode === 'register' && emailConfig.has_whitelist && emailConfig.email_whitelist.length > 0)" class="form-group">
-              <input v-model="account" type="text" class="form-input" placeholder="邮箱 / 用户名" required />
+              <input v-model="account" type="text" class="form-input" :placeholder="t('auth.emailOrUsername')" required />
             </div>
 
             <div class="form-group">
-              <input v-model="password" type="password" class="form-input" placeholder="密码" required />
+              <input v-model="password" type="password" class="form-input" :placeholder="t('auth.password')" required />
             </div>
 
             <!-- 邮箱验证码（注册时且需要验证时显示） -->
@@ -150,7 +155,7 @@
                   v-model="emailCode" 
                   type="text" 
                   class="form-input code-input" 
-                  placeholder="邮箱验证码"
+                  :placeholder="t('auth.emailCode')"
                   maxlength="6"
                   required 
                 />
@@ -160,28 +165,28 @@
                   :disabled="sendingCode || codeSent || !fullEmail"
                   class="code-btn"
                 >
-                  {{ sendingCode ? '发送中...' : codeSent ? `${countdown}秒` : '发送验证码' }}
+                  {{ sendingCode ? t('auth.sending') : codeSent ? `${countdown}${t('auth.secondsLater')}` : t('auth.sendCode') }}
                 </button>
               </div>
               <p v-if="emailConfig.has_whitelist" class="hint-text">
-                ⚠️ 仅白名单邮箱可以注册
+                {{ t('auth.whitelistOnly') }}
               </p>
             </div>
 
             <div v-if="authMode === 'register'" class="form-group">
-              <input v-model="inviteCode" type="text" class="form-input" placeholder="邀请码（选填）" />
+              <input v-model="inviteCode" type="text" class="form-input" :placeholder="t('auth.inviteCode')" />
             </div>
             <div v-if="authError" class="error-message">{{ authError }}</div>
             <button type="submit" class="submit-btn" :disabled="authLoading">
               <span v-if="authLoading" class="loading-spinner"></span>
-              <span v-else>{{ authMode === 'login' ? '登录' : '注册' }}</span>
+              <span v-else>{{ authMode === 'login' ? t('auth.login') : t('auth.register') }}</span>
             </button>
           </form>
 
           <div class="modal-footer">
-            <span class="footer-text">{{ authMode === 'login' ? '没有账号？' : '已有账号？' }}</span>
+            <span class="footer-text">{{ authMode === 'login' ? t('auth.noAccount') : t('auth.hasAccount') }}</span>
             <button class="link-btn" @click="authMode = authMode === 'login' ? 'register' : 'login'">
-              {{ authMode === 'login' ? '立即注册' : '立即登录' }}
+              {{ authMode === 'login' ? t('auth.registerNow') : t('auth.loginNow') }}
             </button>
           </div>
         </div>
@@ -200,8 +205,8 @@
           </button>
 
           <div class="modal-header">
-            <h2 class="modal-title">选择创作模式</h2>
-            <p class="modal-subtitle">根据您的经验选择合适的界面</p>
+            <h2 class="modal-title">{{ t('landing.selectMode') }}</h2>
+            <p class="modal-subtitle">{{ t('landing.selectModeDesc') }}</p>
           </div>
 
           <div class="mode-options">
@@ -219,10 +224,10 @@
                 </svg>
               </div>
               <div class="mode-content">
-                <h3 class="mode-title">专业画布模式</h3>
-                <p class="mode-desc">节点式工作流，支持复杂创作</p>
+                <h3 class="mode-title">{{ t('landing.canvasMode') }}</h3>
+                <p class="mode-desc">{{ t('landing.canvasModeDesc') }}</p>
               </div>
-              <div class="mode-tag">推荐</div>
+              <div class="mode-tag">{{ t('landing.recommended') }}</div>
             </div>
 
             <div :class="['mode-card', { selected: selectedMode === 'simple' }]" @click="selectedMode = 'simple'">
@@ -235,18 +240,18 @@
                 </svg>
               </div>
               <div class="mode-content">
-                <h3 class="mode-title">新手模式</h3>
-                <p class="mode-desc">简洁易用，快速上手</p>
+                <h3 class="mode-title">{{ t('landing.simpleMode') }}</h3>
+                <p class="mode-desc">{{ t('landing.simpleModeDesc') }}</p>
               </div>
             </div>
           </div>
 
           <button class="start-btn" @click="confirmModeSelection">
-            <span class="start-btn-text">开始创作</span>
+            <span class="start-btn-text">{{ t('landing.startCreating') }}</span>
             <span class="start-btn-arrow">→</span>
           </button>
 
-          <p class="mode-hint">可随时在设置中切换模式</p>
+          <p class="mode-hint">{{ t('landing.canSwitchLater') }}</p>
         </div>
       </div>
     </Transition>
@@ -259,6 +264,10 @@ import { useRouter } from 'vue-router'
 import * as THREE from 'three'
 import { getTenantHeaders } from '@/config/tenant'
 import { getMe } from '@/api/client'
+import { useI18n } from '@/i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+
+const { t } = useI18n()
 
 const router = useRouter()
 const wrapper = ref(null)
@@ -350,14 +359,14 @@ async function loadEmailConfig() {
 async function sendVerificationCode() {
   const email = fullEmail.value
   if (!email) {
-    authError.value = '请先输入邮箱'
+    authError.value = t('auth.pleaseEnterEmail')
     return
   }
 
   // 验证邮箱格式
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
   if (!emailRegex.test(email)) {
-    authError.value = '请输入有效的邮箱地址'
+    authError.value = t('auth.invalidEmail')
     return
   }
 
@@ -428,11 +437,11 @@ const submitAuth = async () => {
   // 注册时检查邮箱验证要求
   if (authMode.value === 'register' && emailConfig.value.require_email_verification) {
     if (!email) {
-      authError.value = '请选择邮箱后缀'
+      authError.value = t('auth.pleaseSelectSuffix')
       return
     }
     if (!emailCode.value) {
-      authError.value = '请输入邮箱验证码'
+      authError.value = t('auth.emailCodeRequired')
       return
     }
   }
@@ -452,13 +461,13 @@ const submitAuth = async () => {
     const r = await fetch(url, { method: 'POST', headers: { ...getTenantHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     if (!r.ok) {
       const data = await r.json()
-      authError.value = data.error === 'disabled' ? '账号已被禁用' 
-        : data.error === 'invalid_credentials' ? '密码不正确' 
-        : data.error === 'not_found' ? '用户不存在'
-        : data.error === 'invalid_email_code' ? '邮箱验证码无效或已过期'
-        : data.error === 'email_code_required' ? '请输入邮箱验证码'
-        : data.error === 'email_not_whitelisted' ? '该邮箱域名未在白名单中'
-        : data.message || '操作失败'
+      authError.value = data.error === 'disabled' ? t('auth.accountDisabled') 
+        : data.error === 'invalid_credentials' ? t('auth.invalidCredentials') 
+        : data.error === 'not_found' ? t('auth.userNotFound')
+        : data.error === 'invalid_email_code' ? t('auth.invalidEmailCode')
+        : data.error === 'email_code_required' ? t('auth.emailCodeRequired')
+        : data.error === 'email_not_whitelisted' ? t('auth.emailNotWhitelisted')
+        : data.message || t('auth.operationFailed')
       return
     }
     const j = await r.json()
@@ -470,7 +479,7 @@ const submitAuth = async () => {
     showLoginModal.value = false
     showModeModal.value = true
   } catch (e) {
-    authError.value = '网络错误，请重试'
+    authError.value = t('auth.networkError')
   } finally {
     authLoading.value = false
   }
@@ -1210,6 +1219,15 @@ onUnmounted(() => {
   overflow-x: hidden;
   overflow-y: auto;
   scroll-behavior: smooth;
+  position: relative;
+}
+
+/* 语言切换器容器 - 固定在右上角 */
+.language-switcher-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 100;
 }
 
 .landing-container {

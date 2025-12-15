@@ -12,6 +12,7 @@ import router from './router'
 import { initTheme } from './utils/theme'
 import { initLogger, logPageView } from './utils/logger'
 import { loadBrandConfig, getBrand } from './config/tenant'
+import { createI18n } from './i18n'
 
 // 在应用启动前初始化主题，确保默认是浅色模式
 initTheme()
@@ -93,6 +94,7 @@ const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
+app.use(createI18n())
 
 // 应用挂载后加载品牌配置
 app.mount('#app')

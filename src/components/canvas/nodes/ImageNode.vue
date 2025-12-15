@@ -7,10 +7,17 @@
  * - 点击"图生图"：触发上传，上传后当前节点变成图片预览，自动创建右侧输出节点
  * - 选中输出节点时：底部弹出配置面板
  */
-import { ref, computed, inject, watch, onMounted } from 'vue'
+import { ref, computed, inject, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
 import { generateImageFromText, generateImageFromImage, pollTaskStatus, uploadImages } from '@/api/canvas/nodes'
+import { getApiUrl } from '@/config/tenant'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
+
+// 节点根元素引用（用于计算工具栏位置）
+const nodeRef = ref(null)
 
 const props = defineProps({
   id: String,
@@ -42,6 +49,10 @@ const refDragCounter = ref(0) // 参考图片拖拽计数器
 // 图片列表拖拽排序状态
 const dragSortIndex = ref(-1)
 const dragOverIndex = ref(-1)
+
+// 图片编辑器状态
+const showImageEditor = ref(false)
+const editorInitialTool = ref('')
 
 // 生成参数
 const selectedModel = ref(props.data.model || 'nano-banana-2')
@@ -75,9 +86,9 @@ function toggleCount() {
 
 // 可用选项 - 与主页图片生成保持一致
 const models = [
-  { value: 'nano-banana', label: 'Nano Banana', icon: '🍌', points: 1 },
-  { value: 'nano-banana-hd', label: 'Nano Banana HD', icon: '✨', points: 3 },
-  { value: 'nano-banana-2', label: 'Nano Banana 2', icon: '🚀', points: null } // 积分根据尺寸变化
+  { value: 'nano-banana', label: 'Nano Banana', icon: 'B', points: 1 },
+  { value: 'nano-banana-hd', label: 'Nano Banana HD', icon: 'HD', points: 3 },
+  { value: 'nano-banana-2', label: 'Nano Banana 2', icon: 'B2', points: null } // 积分根据尺寸变化
 ]
 
 // 尺寸选项（仅 nano-banana-2 显示）
@@ -122,6 +133,8 @@ const nodeHeight = ref(props.data.height || 320)
 const isResizing = ref(false)
 const resizeHandle = ref(null)
 const resizeStart = ref({ x: 0, y: 0, width: 0, height: 0 })
+// 用于 resize 节流的 requestAnimationFrame ID
+let resizeRafId = null
 
 // 节点样式类
 // 是否只有单张输出图片
@@ -178,6 +191,247 @@ const hasSourceImage = computed(() =>
   props.data.sourceImages?.length > 0
 )
 
+// ========== 图片工具栏相关 ==========
+// 拖动和缩放状态
+const isDragging = ref(false)
+
+// 拖动检测相关
+const isMouseDown = ref(false) // 是否在节点上按下了鼠标
+const dragStartPos = ref({ x: 0, y: 0 })
+const hasMoved = ref(false)
+const DRAG_THRESHOLD = 5 // 移动超过5px才算拖动
+
+// 是否显示工具栏（选中且有图片内容）- 与 TextNode 保持一致
+const showToolbar = computed(() => {
+  if (!props.selected) return false
+  return hasOutput.value || hasSourceImage.value
+})
+
+// 是否显示底部配置面板 - 与 TextNode 保持一致，选中即显示（源节点除外）
+const showConfigPanel = computed(() => {
+  if (!props.selected) return false
+  if (isSourceNode.value) return false
+  return true
+})
+
+
+// 获取当前图片URL（用于工具栏操作）
+const currentImageUrl = computed(() => {
+  if (hasOutput.value) {
+    return outputImages.value[0]
+  }
+  if (hasSourceImage.value) {
+    return sourceImages.value[0]
+  }
+  return null
+})
+
+// 工具栏预览弹窗
+const showPreviewModal = ref(false)
+const previewImageUrl = ref('')
+
+// 工具栏事件处理 - 进入编辑模式（使用新的 Fabric.js + vue-advanced-cropper 方案）
+function enterEditMode(tool) {
+  if (!currentImageUrl.value) {
+    console.warn('[ImageNode] 没有可编辑的图片')
+    return
+  }
+  // 调用 canvasStore 进入编辑模式
+  canvasStore.enterEditMode(props.id, tool)
+  console.log('[ImageNode] 进入编辑模式，工具:', tool)
+}
+
+function handleToolbarRepaint() {
+  console.log('[ImageNode] 工具栏：重绘', props.id)
+  enterEditMode('repaint') // 使用蒙版绘制进行重绘
+}
+
+function handleToolbarErase() {
+  console.log('[ImageNode] 工具栏：擦除', props.id)
+  enterEditMode('erase') // 使用蒙版绘制进行擦除
+}
+
+function handleToolbarEnhance() {
+  console.log('[ImageNode] 工具栏：增强', props.id)
+  enterEditMode('enhance') // 图像增强（待接入 AI API）
+}
+
+function handleToolbarCutout() {
+  console.log('[ImageNode] 工具栏：抠图', props.id)
+  enterEditMode('cutout') // 智能抠图（待接入 AI API）
+}
+
+function handleToolbarExpand() {
+  console.log('[ImageNode] 工具栏：扩图', props.id)
+  enterEditMode('expand') // 智能扩图（待接入 AI API）
+}
+
+function handleToolbarAnnotate() {
+  console.log('[ImageNode] 工具栏：标注', props.id)
+  enterEditMode('annotate') // 涂鸦标注
+}
+
+function handleToolbarCrop() {
+  console.log('[ImageNode] 工具栏：裁剪', props.id)
+  enterEditMode('crop') // 使用 vue-advanced-cropper 裁剪
+}
+
+// 旧的编辑器相关函数（保留兼容性，可稍后移除）
+function openImageEditor(tool = '') {
+  // 现在调用新的编辑模式
+  enterEditMode(tool)
+}
+
+// 关闭图片编辑器
+function closeImageEditor() {
+  showImageEditor.value = false
+  editorInitialTool.value = ''
+}
+
+// 保存编辑后的图片
+async function handleEditorSave(data) {
+  console.log('[ImageNode] 编辑器保存图片', data)
+  
+  if (!data?.dataUrl) {
+    console.warn('[ImageNode] 没有图片数据')
+    return
+  }
+  
+  try {
+    // 将 dataUrl 转换为 Blob
+    const response = await fetch(data.dataUrl)
+    const blob = await response.blob()
+    
+    // 创建 File 对象
+    const file = new File([blob], `edited_${Date.now()}.png`, { type: 'image/png' })
+    
+    // 上传图片
+    const uploadResult = await uploadImages([file])
+    
+    if (uploadResult?.urls?.length > 0) {
+      const newUrl = uploadResult.urls[0]
+      
+      // 更新节点数据
+      if (hasOutput.value) {
+        // 如果是输出图片，更新输出
+        canvasStore.updateNodeData(props.id, {
+          output: {
+            ...props.data.output,
+            urls: [newUrl, ...(props.data.output?.urls?.slice(1) || [])]
+          }
+        })
+      } else if (hasSourceImage.value) {
+        // 如果是源图片，更新源图片
+        canvasStore.updateNodeData(props.id, {
+          sourceImages: [newUrl, ...(props.data.sourceImages?.slice(1) || [])]
+        })
+      }
+      
+      console.log('[ImageNode] 图片已更新:', newUrl)
+    }
+  } catch (error) {
+    console.error('[ImageNode] 保存图片失败:', error)
+    alert('保存图片失败，请重试')
+  }
+  
+  closeImageEditor()
+}
+
+// 保存蒙版（用于 AI 重绘/擦除）
+function handleEditorSaveMask(data) {
+  console.log('[ImageNode] 编辑器保存蒙版', data)
+  // TODO: 实现蒙版发送到 AI 接口进行重绘/擦除
+  closeImageEditor()
+}
+
+function handleToolbarDownload() {
+  if (!currentImageUrl.value) return
+  
+  const link = document.createElement('a')
+  link.href = currentImageUrl.value
+  link.download = `image_${props.id || Date.now()}.png`
+  link.target = '_blank'
+  
+  if (currentImageUrl.value.startsWith('http') && !currentImageUrl.value.startsWith(window.location.origin)) {
+    window.open(currentImageUrl.value, '_blank')
+  } else {
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+}
+
+function handleToolbarPreview() {
+  if (!currentImageUrl.value) return
+  previewImageUrl.value = currentImageUrl.value
+  showPreviewModal.value = true
+}
+
+function closePreviewModal() {
+  showPreviewModal.value = false
+  previewImageUrl.value = ''
+}
+
+// 节点拖动开始（记录起始位置）
+function handleNodeDragStart(event) {
+  isMouseDown.value = true
+  dragStartPos.value = { x: event.clientX, y: event.clientY }
+  hasMoved.value = false
+  isDragging.value = false // 初始不设置为拖动状态
+}
+
+// 节点拖动中（检测是否真的在移动）
+function handleNodeDragMove(event) {
+  // 只有在节点上按下鼠标后才检测拖动
+  if (!isMouseDown.value) return
+  
+  const dx = Math.abs(event.clientX - dragStartPos.value.x)
+  const dy = Math.abs(event.clientY - dragStartPos.value.y)
+  const distance = Math.sqrt(dx * dx + dy * dy)
+  
+  // 只有移动超过阈值才认为是拖动
+  if (distance > DRAG_THRESHOLD && !hasMoved.value) {
+    hasMoved.value = true
+    isDragging.value = true
+  }
+}
+
+// 节点拖动结束
+function handleNodeDragEnd() {
+  // 只有在节点上按下过鼠标才处理
+  if (!isMouseDown.value) return
+  
+  // 如果真正移动了，恢复状态
+  if (hasMoved.value) {
+    isDragging.value = false
+  }
+  
+  // 重置状态
+  isMouseDown.value = false
+  dragStartPos.value = { x: 0, y: 0 }
+  hasMoved.value = false
+}
+
+// 组件挂载时添加拖动监听
+onMounted(() => {
+  // 监听节点拖动事件
+  if (nodeRef.value) {
+    nodeRef.value.addEventListener('mousedown', handleNodeDragStart)
+    document.addEventListener('mousemove', handleNodeDragMove)
+    document.addEventListener('mouseup', handleNodeDragEnd)
+  }
+})
+
+// 组件卸载时移除监听
+onUnmounted(() => {
+  // 移除拖动监听
+  if (nodeRef.value) {
+    nodeRef.value.removeEventListener('mousedown', handleNodeDragStart)
+  }
+  document.removeEventListener('mousemove', handleNodeDragMove)
+  document.removeEventListener('mouseup', handleNodeDragEnd)
+})
+
 // 输出图片
 const outputImages = computed(() => {
   if (props.data.output?.urls) return props.data.output.urls
@@ -188,66 +442,95 @@ const outputImages = computed(() => {
 // 源图片（上传的）
 const sourceImages = computed(() => props.data.sourceImages || [])
 
-// 收集上游节点的所有图片
-function collectUpstreamImages() {
+// 继承的参考图片（来自左侧连接的节点，支持多图和自定义顺序）
+// 直接在 computed 中处理，确保响应式依赖被正确追踪
+const referenceImages = computed(() => {
+  // 强制访问响应式数据的长度，确保依赖追踪
+  // 这样当 nodes 或 edges 数组变化时，computed 会重新计算
+  const allEdges = [...canvasStore.edges]  // 创建新数组确保响应式
+  const allNodes = [...canvasStore.nodes]  // 创建新数组确保响应式
+  
+  // 触发对所有节点 data 的访问，确保嵌套对象变化时也能重新计算
+  const nodesDataSnapshot = allNodes.map(n => ({
+    id: n.id,
+    type: n.type,
+    outputUrls: n.data?.output?.urls,
+    outputUrl: n.data?.output?.url,
+    sourceImages: n.data?.sourceImages
+  }))
+  
+  // 收集上游图片
   const upstreamImages = []
-  const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
+  const upstreamEdges = allEdges.filter(e => e.target === props.id)
+  
+  console.log('[ImageNode] referenceImages computed - 当前节点:', props.id, '上游边数:', upstreamEdges.length)
   
   for (const edge of upstreamEdges) {
-    const sourceNode = canvasStore.nodes.find(n => n.id === edge.source)
-    if (!sourceNode) continue
+    // 从快照中查找节点数据（确保响应式追踪）
+    const nodeData = nodesDataSnapshot.find(n => n.id === edge.source)
+    if (!nodeData) {
+      console.log('[ImageNode] 未找到上游节点:', edge.source)
+      continue
+    }
     
-    // 图片节点：获取图片
-    if (sourceNode.type === 'image-input' || sourceNode.type === 'image' || sourceNode.type === 'image-gen') {
-      if (sourceNode.data?.output?.urls?.length > 0) {
-        upstreamImages.push(...sourceNode.data.output.urls)
-      } else if (sourceNode.data?.output?.url) {
-        upstreamImages.push(sourceNode.data.output.url)
-      } else if (sourceNode.data?.sourceImages?.length > 0) {
-        upstreamImages.push(...sourceNode.data.sourceImages)
-      }
+    console.log('[ImageNode] 检查上游节点:', nodeData)
+    
+    // 处理所有可能包含图片的节点类型
+    // 优先级：output.urls > output.url > sourceImages
+    if (nodeData.outputUrls?.length > 0) {
+      console.log('[ImageNode] 从 output.urls 获取图片:', nodeData.outputUrls.length, '张')
+      upstreamImages.push(...nodeData.outputUrls)
+    } else if (nodeData.outputUrl) {
+      console.log('[ImageNode] 从 output.url 获取图片:', nodeData.outputUrl.substring(0, 60))
+      upstreamImages.push(nodeData.outputUrl)
+    } else if (nodeData.sourceImages?.length > 0) {
+      console.log('[ImageNode] 从 sourceImages 获取图片:', nodeData.sourceImages.length, '张')
+      upstreamImages.push(...nodeData.sourceImages)
+    } else {
+      console.log('[ImageNode] 上游节点没有可用的图片数据')
     }
   }
   
-  return upstreamImages
-}
-
-// 继承的参考图片（来自左侧连接的节点，支持多图和自定义顺序）
-const referenceImages = computed(() => {
-  // 收集上游图片
-  const upstreamImages = collectUpstreamImages()
+  console.log('[ImageNode] 收集到上游图片:', upstreamImages.length, '张', upstreamImages)
   
-  // 如果有用户自定义的顺序，按顺序返回
-  const customOrder = props.data.imageOrder || []
-  if (customOrder.length > 0 && upstreamImages.length > 0) {
-    const orderedImages = []
-    const remainingImages = [...upstreamImages]
-    
-    for (const url of customOrder) {
-      const index = remainingImages.indexOf(url)
-      if (index !== -1) {
-        orderedImages.push(url)
-        remainingImages.splice(index, 1)
+  // 只要有上游连接，就优先使用上游图片（即使上游还没有输出）
+  // 这确保了连接关系的正确性
+  if (upstreamEdges.length > 0) {
+    // 如果有用户自定义的顺序，按顺序返回
+    const customOrder = props.data.imageOrder || []
+    if (customOrder.length > 0 && upstreamImages.length > 0) {
+      const orderedImages = []
+      const remainingImages = [...upstreamImages]
+      
+      for (const url of customOrder) {
+        const index = remainingImages.indexOf(url)
+        if (index !== -1) {
+          orderedImages.push(url)
+          remainingImages.splice(index, 1)
+        }
       }
+      
+      orderedImages.push(...remainingImages)
+      console.log('[ImageNode] 返回自定义顺序的上游图片:', orderedImages.length, '张')
+      return orderedImages
     }
     
-    orderedImages.push(...remainingImages)
-    return orderedImages
-  }
-  
-  if (upstreamImages.length > 0) {
+    console.log('[ImageNode] 返回上游图片:', upstreamImages.length, '张')
     return upstreamImages
   }
   
-  // 使用继承数据
+  // 没有上游连接时，使用继承数据
   if (props.data.inheritedData?.urls?.length > 0) {
+    console.log('[ImageNode] 使用继承数据:', props.data.inheritedData.urls.length, '张')
     return props.data.inheritedData.urls
   }
   
   if (props.data.referenceImages?.length > 0) {
+    console.log('[ImageNode] 使用 referenceImages:', props.data.referenceImages.length, '张')
     return props.data.referenceImages
   }
   
+  console.log('[ImageNode] 没有参考图片')
   return []
 })
 
@@ -257,12 +540,12 @@ const userPoints = computed(() => {
   return (userInfo.value.package_points || 0) + (userInfo.value.points || 0)
 })
 
-// 快捷操作 - 初始状态显示
+// 快捷操作 - 初始状态显示 - 使用翻译键
 const quickActions = [
-  { icon: '⬆', label: '图生图', action: () => triggerUpload('image-to-image') },
-  { icon: '⬆', label: '图生视频', action: () => triggerUpload('image-to-video') },
-  { icon: '⧉', label: '图片换背景', action: () => triggerUpload('change-background') },
-  { icon: '▶', label: '首帧图生视频', action: () => triggerUpload('first-frame-video') }
+  { icon: '↑', labelKey: 'canvas.imageNode.imageToImage', action: () => triggerUpload('image-to-image') },
+  { icon: '↑', labelKey: 'canvas.imageNode.imageToVideo', action: () => triggerUpload('image-to-video') },
+  { icon: '⊡', labelKey: 'canvas.imageNode.changeBackground', action: () => triggerUpload('change-background') },
+  { icon: '▷', labelKey: 'canvas.imageNode.firstFrameVideo', action: () => triggerUpload('first-frame-video') }
 ]
 
 // 监听参数变化，保存到store
@@ -285,6 +568,17 @@ watch(() => props.data.label, (newLabel) => {
     localLabel.value = newLabel
   }
 })
+
+// 同步选中状态到 canvasStore（确保工具栏正确显示）
+watch(() => props.selected, (isSelected) => {
+  if (isSelected) {
+    // 当节点被 VueFlow 选中时，确保 store 也同步更新
+    if (canvasStore.selectedNodeId !== props.id) {
+      console.log('[ImageNode] 同步选中状态到 store:', props.id)
+      canvasStore.selectNode(props.id)
+    }
+  }
+}, { immediate: true })
 
 // 双击标签进入编辑模式
 function handleLabelDoubleClick(event) {
@@ -359,15 +653,27 @@ async function handleFileUpload(event) {
   }
 }
 
-// 上传图片文件
+// 上传图片文件 - 立即上传到服务器获取 URL（与 Home.vue 保持一致）
 async function uploadImageFile(file) {
-  // 先转为 base64 预览
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (e) => resolve(e.target.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
+  try {
+    // 立即上传到服务器获取真正的 URL
+    console.log('[ImageNode] 上传图片文件到服务器:', file.name, '大小:', (file.size / 1024).toFixed(2), 'KB')
+    const urls = await uploadImages([file])
+    if (urls && urls.length > 0) {
+      console.log('[ImageNode] 图片上传成功，URL:', urls[0])
+      return urls[0]
+    }
+    throw new Error('上传返回空URL')
+  } catch (error) {
+    console.error('[ImageNode] 图片上传失败，回退到 base64:', error)
+    // 如果上传失败，回退到 base64（作为备用方案）
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve(e.target.result)
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
 }
 
 // 图生图流程
@@ -379,7 +685,7 @@ async function handleImageToImageFlow(imageUrl) {
   canvasStore.updateNodeData(props.id, {
     nodeRole: 'source',
     sourceImages: [imageUrl],
-    title: 'Image'
+    title: t('canvas.nodes.image')
   })
   
   // 2. 创建右侧的输出节点
@@ -394,7 +700,7 @@ async function handleImageToImageFlow(imageUrl) {
     type: 'image',
     position: newNodePosition,
     data: { 
-      title: 'Image',
+      title: t('canvas.nodes.image'),
       nodeRole: 'output', // 输出节点
       referenceImages: [imageUrl] // 传递参考图
     }
@@ -434,7 +740,7 @@ async function handleImageToVideoFlow(imageUrl) {
       y: currentNode.position.y
     },
     data: { 
-      title: 'Video',
+      title: t('canvas.nodes.video'),
       referenceImages: [imageUrl]
     }
   })
@@ -476,7 +782,7 @@ async function handleFirstFrameVideoFlow(imageUrl) {
       y: currentNode.position.y
     },
     data: { 
-      title: 'Video',
+      title: t('canvas.nodes.video'),
       generationMode: 'first',
       referenceImages: [imageUrl]
     }
@@ -597,8 +903,182 @@ async function uploadBase64Images(base64Images) {
   return urls
 }
 
+// 判断是否是有效的 URL（HTTP/HTTPS 或相对路径）
+function isValidUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  // HTTP/HTTPS URL
+  if (str.startsWith('http://') || str.startsWith('https://')) return true
+  // 相对路径 URL（以 / 开头，如 /api/images/file/xxx）
+  if (str.startsWith('/api/') || str.startsWith('/storage/')) return true
+  return false
+}
+
+// 判断是否是 base64 数据
+function isBase64Image(str) {
+  if (!str || typeof str !== 'string') return false
+  return str.startsWith('data:')
+}
+
+// 判断是否是 blob URL
+function isBlobUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  return str.startsWith('blob:')
+}
+
+// 判断是否是七牛云 CDN URL（公开可访问的 URL）
+function isQiniuCdnUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  // 检查是否是七牛云的 CDN 域名
+  return str.includes('files.nananobanana.cn') || 
+         str.includes('qncdn.') ||
+         str.includes('.qiniucdn.com') ||
+         str.includes('.qbox.me')
+}
+
+// 判断是否是需要重新上传的本地/相对路径 URL
+function needsReupload(url) {
+  if (!url || typeof url !== 'string') return false
+  // 相对路径需要重新上传
+  if (url.startsWith('/api/images/file/')) return true
+  // 本地服务器 URL 需要重新上传（AI 模型无法访问）
+  if (url.includes('nanobanana') && url.includes('/api/images/file/')) return true
+  if (url.includes('localhost') && url.includes('/api/images/file/')) return true
+  return false
+}
+
+// 将本地/相对路径的图片重新上传到七牛云获取公开 URL
+async function reuploadToCloud(url) {
+  console.log('[ImageNode] 重新上传图片到云端:', url)
+  
+  try {
+    // 获取图片内容
+    let fetchUrl = url
+    if (url.startsWith('/api/')) {
+      // 相对路径，转换为完整 URL
+      fetchUrl = getApiUrl(url)
+    }
+    
+    console.log('[ImageNode] 获取图片:', fetchUrl)
+    const response = await fetch(fetchUrl, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`获取图片失败: ${response.status}`)
+    }
+    
+    const blob = await response.blob()
+    const file = new File([blob], `reupload_${Date.now()}.png`, { type: blob.type || 'image/png' })
+    
+    // 重新上传到服务器（服务器会上传到七牛云）
+    const urls = await uploadImages([file])
+    if (urls && urls.length > 0) {
+      console.log('[ImageNode] 重新上传成功，新 URL:', urls[0])
+      return urls[0]
+    }
+    throw new Error('上传返回空 URL')
+  } catch (error) {
+    console.error('[ImageNode] 重新上传失败:', error)
+    // 失败时返回原 URL，让后端尝试处理
+    return url
+  }
+}
+
+// 处理参考图片 URL，确保 AI 模型可以访问
+async function ensureAccessibleUrls(imageUrls) {
+  const accessibleUrls = []
+  
+  for (const url of imageUrls) {
+    if (isQiniuCdnUrl(url)) {
+      // 已经是七牛云 URL，直接使用
+      console.log('[ImageNode] 使用七牛云 URL:', url.substring(0, 60))
+      accessibleUrls.push(url)
+    } else if (needsReupload(url)) {
+      // 需要重新上传到云端
+      console.log('[ImageNode] 需要重新上传:', url.substring(0, 60))
+      const newUrl = await reuploadToCloud(url)
+      accessibleUrls.push(newUrl)
+    } else if (url.startsWith('http://') || url.startsWith('https://')) {
+      // 其他 HTTP URL，假设可访问
+      accessibleUrls.push(url)
+    } else if (url.startsWith('/api/') || url.startsWith('/storage/')) {
+      // 相对路径，转换为完整 URL
+      const fullUrl = getApiUrl(url)
+      // 检查是否需要重新上传
+      if (needsReupload(fullUrl)) {
+        const newUrl = await reuploadToCloud(url)
+        accessibleUrls.push(newUrl)
+      } else {
+        accessibleUrls.push(fullUrl)
+      }
+    } else {
+      // 其他格式，尝试直接使用
+      accessibleUrls.push(url)
+    }
+  }
+  
+  return accessibleUrls
+}
+
+// 获取上游节点的实时图片数据（直接从 store 获取，确保数据最新）
+function getUpstreamImagesRealtime() {
+  const upstreamImages = []
+  const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
+  
+  console.log('[ImageNode] getUpstreamImagesRealtime - 检查上游边数:', upstreamEdges.length)
+  
+  for (const edge of upstreamEdges) {
+    // 直接从 store 的 nodes 数组中获取最新数据
+    const sourceNode = canvasStore.nodes.find(n => n.id === edge.source)
+    if (!sourceNode) {
+      console.log('[ImageNode] 未找到上游节点:', edge.source)
+      continue
+    }
+    
+    console.log('[ImageNode] 检查上游节点:', {
+      id: sourceNode.id,
+      type: sourceNode.type,
+      hasOutput: !!sourceNode.data?.output,
+      outputUrls: sourceNode.data?.output?.urls,
+      sourceImages: sourceNode.data?.sourceImages
+    })
+    
+    // 优先级：output.urls > output.url > sourceImages
+    if (sourceNode.data?.output?.urls?.length > 0) {
+      console.log('[ImageNode] 从 output.urls 获取图片:', sourceNode.data.output.urls.length, '张')
+      upstreamImages.push(...sourceNode.data.output.urls)
+    } else if (sourceNode.data?.output?.url) {
+      console.log('[ImageNode] 从 output.url 获取图片')
+      upstreamImages.push(sourceNode.data.output.url)
+    } else if (sourceNode.data?.sourceImages?.length > 0) {
+      console.log('[ImageNode] 从 sourceImages 获取图片:', sourceNode.data.sourceImages.length, '张')
+      upstreamImages.push(...sourceNode.data.sourceImages)
+    } else {
+      console.log('[ImageNode] 上游节点没有可用的图片数据')
+    }
+  }
+  
+  console.log('[ImageNode] 实时获取上游图片总数:', upstreamImages.length)
+  return upstreamImages
+}
+
 // 单次生成请求
 async function sendImageGenerateRequest(finalPrompt) {
+  // 直接从 store 获取上游节点的最新图片数据（确保数据实时性）
+  const currentReferenceImages = getUpstreamImagesRealtime()
+  
+  // 如果实时获取为空，尝试使用 computed 属性作为后备
+  const finalReferenceImages = currentReferenceImages.length > 0 
+    ? currentReferenceImages 
+    : referenceImages.value
+  
+  console.log('[ImageNode] ========== 开始生成 ==========')
+  console.log('[ImageNode] 实时获取的参考图:', currentReferenceImages.length, '张')
+  console.log('[ImageNode] computed 属性的参考图:', referenceImages.value.length, '张')
+  console.log('[ImageNode] 最终使用的参考图:', finalReferenceImages)
+  
   // 构建基础参数
   const baseParams = {
     prompt: finalPrompt || '保持原图风格',
@@ -609,49 +1089,100 @@ async function sendImageGenerateRequest(finalPrompt) {
     image_size: imageSize.value || '2K'
   }
   
-  if (referenceImages.value.length > 0) {
-    // 图生图模式：需要先上传图片获取 URL
+  if (finalReferenceImages.length > 0) {
+    // 图生图模式：需要确保所有图片都是有效的 URL
     let imageUrls = []
     
-    // 分离 base64 图片和已有 URL
+    // 分离不同类型的图片
     const base64Images = []
-    const existingUrls = []
+    const blobUrls = []
+    const httpUrls = []
     
-    for (const img of referenceImages.value) {
-      if (img.startsWith('data:')) {
+    for (const img of finalReferenceImages) {
+      if (isBase64Image(img)) {
         base64Images.push(img)
+      } else if (isBlobUrl(img)) {
+        blobUrls.push(img)
+      } else if (isValidUrl(img)) {
+        httpUrls.push(img)
       } else {
-        existingUrls.push(img)
+        // 未知格式，记录警告但跳过
+        console.warn('[ImageNode] 未知图片格式，跳过:', img?.substring?.(0, 80) || img)
       }
     }
     
-    console.log('[ImageNode] 参考图片:', {
+    console.log('[ImageNode] 参考图片分类:', {
       base64Count: base64Images.length,
-      urlCount: existingUrls.length
+      blobCount: blobUrls.length,
+      httpUrlCount: httpUrls.length
     })
     
     // 上传 base64 图片
     if (base64Images.length > 0) {
       try {
+        console.log('[ImageNode] 上传 base64 图片到服务器...')
         const uploadedUrls = await uploadBase64Images(base64Images)
-        imageUrls = [...uploadedUrls, ...existingUrls]
+        if (uploadedUrls && uploadedUrls.length > 0) {
+          imageUrls.push(...uploadedUrls)
+          console.log('[ImageNode] base64 图片上传成功:', uploadedUrls.length, '张')
+        }
       } catch (e) {
-        console.error('[ImageNode] 图片上传失败:', e)
+        console.error('[ImageNode] base64 图片上传失败:', e)
         throw new Error('参考图片上传失败，请重试')
       }
-    } else {
-      imageUrls = existingUrls
     }
     
-    console.log('[ImageNode] 图生图请求:', {
-      ...baseParams,
-      imageUrls: imageUrls.map(url => url.substring(0, 60) + '...')
+    // 处理 blob URL：需要先转换为 File 再上传
+    if (blobUrls.length > 0) {
+      try {
+        console.log('[ImageNode] 处理 blob URL...')
+        for (const blobUrl of blobUrls) {
+          const response = await fetch(blobUrl)
+          const blob = await response.blob()
+          const file = new File([blob], `blob_image_${Date.now()}.png`, { type: blob.type || 'image/png' })
+          const urls = await uploadImages([file])
+          if (urls && urls.length > 0) {
+            imageUrls.push(urls[0])
+          }
+        }
+        console.log('[ImageNode] blob URL 处理成功:', blobUrls.length, '张')
+      } catch (e) {
+        console.error('[ImageNode] blob URL 处理失败:', e)
+        throw new Error('参考图片处理失败，请重试')
+      }
+    }
+    
+    // 添加已有的 URL
+    imageUrls.push(...httpUrls)
+    
+    // 验证最终的 URL 列表
+    if (imageUrls.length === 0) {
+      throw new Error('没有有效的参考图片URL')
+    }
+    
+    console.log('[ImageNode] 图生图请求 - 处理前的参考图片 URLs:', {
+      count: imageUrls.length,
+      urls: imageUrls
     })
     
-    return await generateImageFromImage({
-      ...baseParams,
-      images: imageUrls
+    // 🔥 关键：确保所有 URL 都是 AI 模型可以访问的（七牛云 CDN URL）
+    // 如果是本地服务器的相对路径，需要重新上传到七牛云
+    const accessibleUrls = await ensureAccessibleUrls(imageUrls)
+    
+    console.log('[ImageNode] 图生图请求 - 处理后的可访问 URLs:', {
+      count: accessibleUrls.length,
+      urls: accessibleUrls
     })
+    
+    // 构建完整的请求参数
+    const requestParams = {
+      ...baseParams,
+      images: accessibleUrls
+    }
+    
+    console.log('[ImageNode] 发送图生图请求，完整参数:', JSON.stringify(requestParams, null, 2))
+    
+    return await generateImageFromImage(requestParams)
   } else {
     // 文生图
     console.log('[ImageNode] 文生图请求:', baseParams)
@@ -788,7 +1319,7 @@ function createNewOutputNode() {
     type: 'image',
     position: newNodePosition,
     data: {
-      title: 'Image',
+      title: t('canvas.nodes.image'),
       nodeRole: 'output',
       status: 'idle',
       prompt: promptText.value,
@@ -1073,22 +1604,42 @@ function handleResizeStart(handle, event) {
 function handleResizeMove(event) {
   if (!isResizing.value) return
   
-  const deltaX = event.clientX - resizeStart.value.x
-  const deltaY = event.clientY - resizeStart.value.y
-  
-  const viewport = canvasStore.viewport
-  const zoom = viewport.zoom || 1
-  
-  if (resizeHandle.value === 'right' || resizeHandle.value === 'corner') {
-    nodeWidth.value = Math.max(280, resizeStart.value.width + deltaX / zoom)
+  // 使用 requestAnimationFrame 节流，提高拖拽流畅度
+  if (resizeRafId) {
+    cancelAnimationFrame(resizeRafId)
   }
   
-  if (resizeHandle.value === 'bottom' || resizeHandle.value === 'corner') {
-    nodeHeight.value = Math.max(200, resizeStart.value.height + deltaY / zoom)
-  }
+  const clientX = event.clientX
+  const clientY = event.clientY
+  
+  resizeRafId = requestAnimationFrame(() => {
+    if (!isResizing.value) return
+    
+    const deltaX = clientX - resizeStart.value.x
+    const deltaY = clientY - resizeStart.value.y
+    
+    const viewport = canvasStore.viewport
+    const zoom = viewport.zoom || 1
+    
+    if (resizeHandle.value === 'right' || resizeHandle.value === 'corner') {
+      nodeWidth.value = Math.max(280, resizeStart.value.width + deltaX / zoom)
+    }
+    
+    if (resizeHandle.value === 'bottom' || resizeHandle.value === 'corner') {
+      nodeHeight.value = Math.max(200, resizeStart.value.height + deltaY / zoom)
+    }
+    
+    resizeRafId = null
+  })
 }
 
 function handleResizeEnd() {
+  // 取消未执行的 RAF
+  if (resizeRafId) {
+    cancelAnimationFrame(resizeRafId)
+    resizeRafId = null
+  }
+  
   isResizing.value = false
   resizeHandle.value = null
   
@@ -1113,10 +1664,10 @@ function handleContextMenu(event) {
 // 左侧快捷操作菜单显示状态
 const showLeftMenu = ref(false)
 
-// 左侧快捷操作列表（图片节点的上游输入）
+// 左侧快捷操作列表（图片节点的上游输入）- 使用翻译键
 const leftQuickActions = [
-  { icon: '✍️', label: '提示词', action: () => createUpstreamNode('text-input', '提示词') },
-  { icon: '🖼️', label: '参考图', action: () => createUpstreamNode('image-input', '参考图') }
+  { icon: 'Aa', labelKey: 'canvas.imageNode.prompt', action: () => createUpstreamNode('text-input', t('canvas.imageNode.prompt')) },
+  { icon: '◫', labelKey: 'canvas.imageNode.refImage', action: () => createUpstreamNode('image-input', t('canvas.imageNode.refImage')) }
 ]
 
 // 添加按钮交互
@@ -1556,7 +2107,7 @@ async function handleDrop(event) {
 </script>
 
 <template>
-  <div :class="nodeClass" @contextmenu="handleContextMenu">
+  <div ref="nodeRef" :class="nodeClass" @contextmenu="handleContextMenu">
     <!-- 隐藏的文件上传 input -->
     <input 
       ref="fileInputRef"
@@ -1584,6 +2135,66 @@ async function handleDrop(event) {
       id="input"
       class="node-handle node-handle-hidden"
     />
+    
+    <!-- 图片工具栏（选中且有图片时显示）- 与 TextNode 保持一致 -->
+    <div v-if="showToolbar" class="image-toolbar">
+      <button class="toolbar-btn" title="重绘" @mousedown.prevent="handleToolbarRepaint">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>重绘</span>
+      </button>
+      <button class="toolbar-btn" title="擦除" @mousedown.prevent="handleToolbarErase">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M18.364 5.636a9 9 0 11-12.728 0M12 3v9" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4.5 16.5l3-3 3 3-3 3-3-3z" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>擦除</span>
+      </button>
+      <button class="toolbar-btn" title="增强" @mousedown.prevent="handleToolbarEnhance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="12" y="15" text-anchor="middle" font-size="8" font-weight="bold" fill="currentColor" stroke="none">HD</text>
+        </svg>
+        <span>增强</span>
+      </button>
+      <button class="toolbar-btn" title="抠图" @mousedown.prevent="handleToolbarCutout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="12" cy="12" r="5" stroke-dasharray="3 2"/>
+        </svg>
+        <span>抠图</span>
+      </button>
+      <button class="toolbar-btn" title="扩图" @mousedown.prevent="handleToolbarExpand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="6" y="6" width="12" height="12" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3 9V5a2 2 0 012-2h4M15 3h4a2 2 0 012 2v4M21 15v4a2 2 0 01-2 2h-4M9 21H5a2 2 0 01-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>扩图</span>
+      </button>
+      <div class="toolbar-divider"></div>
+      <button class="toolbar-btn icon-only" title="标注" @mousedown.prevent="handleToolbarAnnotate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="toolbar-btn icon-only" title="裁剪" @mousedown.prevent="handleToolbarCrop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M6 2v4M6 18v4M2 6h4M18 6h4M18 18h-8a2 2 0 01-2-2V6" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 6h10a2 2 0 012 2v10" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="toolbar-btn icon-only" title="下载" @mousedown.prevent="handleToolbarDownload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="toolbar-btn icon-only" title="放大预览" @mousedown.prevent="handleToolbarPreview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
     
     <!-- 节点标签 -->
     <div 
@@ -1626,7 +2237,7 @@ async function handleDrop(event) {
           @click="action.action"
         >
           <span class="left-menu-icon">{{ action.icon }}</span>
-          <span class="left-menu-label">{{ action.label }}</span>
+          <span class="left-menu-label">{{ t(action.labelKey) }}</span>
         </div>
       </div>
       
@@ -1685,7 +2296,7 @@ async function handleDrop(event) {
         <template v-if="isSourceNode && hasSourceImage">
           <!-- 上传按钮（右上角） -->
           <button class="upload-overlay-btn" @click="handleReupload">
-            <span class="upload-icon">⬆</span>
+            <span class="upload-icon">↑</span>
             <span>上传</span>
           </button>
           
@@ -1760,15 +2371,15 @@ async function handleDrop(event) {
             
             <!-- 空状态 - 快捷操作 -->
             <div v-else class="empty-state">
-              <div class="hint-text">尝试：</div>
+              <div class="hint-text">{{ t('canvas.textNode.try') }}</div>
               <div 
                 v-for="action in quickActions"
-                :key="action.label"
+                :key="action.labelKey"
                 class="quick-action"
                 @click.stop="action.action"
               >
                 <span class="action-icon">{{ action.icon }}</span>
-                <span class="action-label">{{ action.label }}</span>
+                <span class="action-label">{{ t(action.labelKey) }}</span>
               </div>
             </div>
           </div>
@@ -1807,8 +2418,8 @@ async function handleDrop(event) {
       class="node-handle node-handle-hidden"
     />
     
-    <!-- 底部配置面板（仅输出节点选中时显示） -->
-    <div v-if="selected && !isSourceNode" class="config-panel" @mousedown.stop>
+    <!-- 底部配置面板（仅输出节点选中时显示，拖动和缩放时隐藏） -->
+    <div v-if="showConfigPanel" class="config-panel" @mousedown.stop>
       <!-- 参考图片预览（支持拖拽上传和排序） -->
       <div 
         class="panel-frames"
@@ -1877,7 +2488,7 @@ async function handleDrop(event) {
         <div class="config-left">
           <!-- 模型选择器 -->
           <div class="model-selector">
-            <span class="model-icon">{{ models.find(m => m.value === selectedModel)?.icon || '🍌' }}</span>
+            <span class="model-icon">{{ models.find(m => m.value === selectedModel)?.icon || 'B' }}</span>
             <select v-model="selectedModel" class="model-select-input">
               <option v-for="m in models" :key="m.value" :value="m.value">
                 {{ m.label }}
@@ -1926,7 +2537,7 @@ async function handleDrop(event) {
             :disabled="isGenerating"
             @click="handleGenerate"
           >
-            <span v-if="isGenerating" class="btn-loading">⏳</span>
+            <span v-if="isGenerating" class="btn-loading">...</span>
             <svg v-else class="btn-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7"/>
             </svg>
@@ -1934,6 +2545,31 @@ async function handleDrop(event) {
         </div>
       </div>
     </div>
+    
+    <!-- 放大预览弹窗（使用 Teleport 渲染到 body） -->
+    <Teleport to="body">
+      <!-- 放大预览弹窗 -->
+      <Transition name="modal-fade">
+        <div v-if="showPreviewModal" class="preview-modal-overlay" @click="closePreviewModal">
+          <div class="preview-modal-content" @click.stop>
+            <img :src="previewImageUrl" alt="预览图片" class="preview-image" />
+            <button class="preview-close-btn" @click="closePreviewModal">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <div class="preview-actions">
+              <button class="preview-action-btn" @click="handleToolbarDownload">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>下载</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -1948,6 +2584,68 @@ async function handleDrop(event) {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
+}
+
+/* 覆盖全局 .canvas-node.selected 样式，选中效果由内部控制 */
+.image-node.selected {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* ========== 图片工具栏（与 TextNode 的 format-toolbar 保持一致） ========== */
+.image-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 20px;
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.image-toolbar .toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: #888;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.image-toolbar .toolbar-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.image-toolbar .toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.image-toolbar .toolbar-btn.icon-only {
+  padding: 6px;
+}
+
+.image-toolbar .toolbar-btn.icon-only span {
+  display: none;
+}
+
+.image-toolbar .toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: #3a3a3a;
+  margin: 0 6px;
 }
 
 /* 节点标签 */
@@ -2027,8 +2725,10 @@ async function handleDrop(event) {
   border-color: transparent;
 }
 
+/* 选中状态 - 与 TextNode 保持一致 */
 .image-node.selected .node-card {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  border-color: var(--canvas-accent-primary, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 /* ========== 彗星环绕发光特效（生成中） ========== */
@@ -2136,6 +2836,15 @@ async function handleDrop(event) {
   pointer-events: none;
   /* 添加轻微阴影增加层次感 */
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  transition: box-shadow 0.2s ease;
+}
+
+/* 源节点选中时 - 图片发光效果 */
+.image-node.is-source-node.selected .source-image-preview img {
+  box-shadow: 
+    0 4px 20px rgba(0, 0, 0, 0.4),
+    0 0 0 2px var(--canvas-accent-primary, #3b82f6),
+    0 0 20px rgba(59, 130, 246, 0.3);
 }
 
 .upload-overlay-btn {
@@ -2266,6 +2975,15 @@ async function handleDrop(event) {
   aspect-ratio: auto;
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  transition: box-shadow 0.2s ease;
+}
+
+/* 单张输出选中时 - 图片发光效果 */
+.image-node.has-single-output.selected .preview-images.single-image .preview-image {
+  box-shadow: 
+    0 4px 20px rgba(0, 0, 0, 0.4),
+    0 0 0 2px var(--canvas-accent-primary, #3b82f6),
+    0 0 20px rgba(59, 130, 246, 0.3);
 }
 
 /* 准备状态（有上游连接） */
@@ -2353,20 +3071,8 @@ async function handleDrop(event) {
   border: 1px solid var(--canvas-border-default, #3a3a3a);
   border-radius: 12px;
   overflow: hidden;
-  animation: slideDown 0.2s ease;
   z-index: 1000;
   pointer-events: auto;
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* 参考图片面板 */
@@ -2803,13 +3509,13 @@ async function handleDrop(event) {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
   font-weight: 300;
   cursor: pointer;
   display: flex;
@@ -2820,24 +3526,24 @@ async function handleDrop(event) {
   z-index: 10;
 }
 
-.node-wrapper:hover .node-add-btn {
+.node-wrapper:hover .node-add-btn,
+.image-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 .node-add-btn-left {
-  left: -12px;
+  left: -52px;
 }
 
 .node-add-btn-right {
-  right: -12px;
+  right: -52px;
 }
 
 /* ========== 左侧快捷操作菜单 ========== */
@@ -2940,5 +3646,111 @@ async function handleDrop(event) {
   cursor: nwse-resize;
   background: var(--canvas-accent-primary, #3b82f6);
   border-radius: 2px;
+}
+</style>
+
+<!-- 预览弹窗样式（非 scoped，因为使用 Teleport 渲染到 body） -->
+<style>
+/* ========== 预览弹窗 ========== */
+.preview-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+  cursor: zoom-out;
+}
+
+.preview-modal-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  cursor: default;
+}
+
+.preview-modal-content .preview-image {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.preview-modal-content .preview-close-btn {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  width: 32px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.preview-modal-content .preview-close-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: scale(1.1);
+}
+
+.preview-modal-content .preview-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.preview-modal-content .preview-actions {
+  position: absolute;
+  bottom: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+}
+
+.preview-modal-content .preview-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preview-modal-content .preview-action-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.preview-modal-content .preview-action-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* 弹窗动画 */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: all 0.3s ease;
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+
+.modal-fade-enter-from .preview-image,
+.modal-fade-leave-to .preview-image {
+  transform: scale(0.9);
 }
 </style>

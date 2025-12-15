@@ -5,6 +5,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
 import { getWorkflowTemplates } from '@/api/canvas/workflow'
+import { useI18n } from '@/i18n'
 
 const props = defineProps({
   visible: Boolean
@@ -12,18 +13,19 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'select'])
 const canvasStore = useCanvasStore()
+const { t } = useI18n()
 
 const templates = ref([])
 const loading = ref(true)
 const selectedCategory = ref('all')
 
-// 分类
-const categories = [
-  { key: 'all', label: '全部' },
-  { key: 'basic', label: '基础' },
-  { key: 'advanced', label: '进阶' },
-  { key: 'video', label: '视频' }
-]
+// 分类（使用 computed 以支持语言切换）
+const categories = computed(() => [
+  { key: 'all', label: t('canvas.categories.all') },
+  { key: 'basic', label: t('canvas.categories.basic') },
+  { key: 'advanced', label: t('canvas.categories.advanced') },
+  { key: 'video', label: t('canvas.categories.video') }
+])
 
 // 过滤后的模板
 const filteredTemplates = computed(() => {
@@ -53,63 +55,63 @@ function getBuiltinTemplates() {
   return [
     {
       id: 'tpl-quick-image',
-      name: '快速出图',
-      description: '文本直接生成图片',
+      name: t('canvas.templates.quickImage.name'),
+      description: t('canvas.templates.quickImage.desc'),
       icon: '🎨',
       category: 'basic',
       nodes: [
-        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: '输入提示词' } },
-        { id: 'n2', type: 'text-to-image', position: { x: 400, y: 200 }, data: { title: '生成图片' } }
+        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: t('canvas.templates.nodeTitle.inputPrompt') } },
+        { id: 'n2', type: 'text-to-image', position: { x: 400, y: 200 }, data: { title: t('canvas.templates.nodeTitle.generateImage') } }
       ],
       edges: [{ id: 'e1', source: 'n1', target: 'n2' }]
     },
     {
       id: 'tpl-prompt-enhance',
-      name: '智能优化出图',
-      description: 'AI 优化提示词后生成图片',
+      name: t('canvas.templates.promptEnhance.name'),
+      description: t('canvas.templates.promptEnhance.desc'),
       icon: '✨',
       category: 'advanced',
       nodes: [
-        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: '输入想法' } },
-        { id: 'n2', type: 'llm-prompt-enhance', position: { x: 350, y: 200 }, data: { title: '提示词优化', type: 'llm-prompt-enhance' } },
-        { id: 'n3', type: 'text-to-image', position: { x: 600, y: 200 }, data: { title: '生成图片' } }
+        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: t('canvas.templates.nodeTitle.inputIdea') } },
+        { id: 'n2', type: 'llm-prompt-enhance', position: { x: 350, y: 200 }, data: { title: t('canvas.templates.nodeTitle.promptOptimize'), type: 'llm-prompt-enhance' } },
+        { id: 'n3', type: 'text-to-image', position: { x: 600, y: 200 }, data: { title: t('canvas.templates.nodeTitle.generateImage') } }
       ],
       edges: [{ id: 'e1', source: 'n1', target: 'n2' }, { id: 'e2', source: 'n2', target: 'n3' }]
     },
     {
       id: 'tpl-image-to-video',
-      name: '图片转视频',
-      description: '上传图片生成视频',
+      name: t('canvas.templates.imageToVideo.name'),
+      description: t('canvas.templates.imageToVideo.desc'),
       icon: '🎥',
       category: 'video',
       nodes: [
-        { id: 'n1', type: 'image-input', position: { x: 100, y: 200 }, data: { title: '上传图片' } },
-        { id: 'n2', type: 'image-to-video', position: { x: 400, y: 200 }, data: { title: '生成视频' } }
+        { id: 'n1', type: 'image-input', position: { x: 100, y: 200 }, data: { title: t('canvas.templates.nodeTitle.uploadImage') } },
+        { id: 'n2', type: 'image-to-video', position: { x: 400, y: 200 }, data: { title: t('canvas.templates.nodeTitle.generateVideo') } }
       ],
       edges: [{ id: 'e1', source: 'n1', target: 'n2' }]
     },
     {
       id: 'tpl-text-to-video',
-      name: '文字生视频',
-      description: '文本直接生成视频',
+      name: t('canvas.templates.textToVideo.name'),
+      description: t('canvas.templates.textToVideo.desc'),
       icon: '📹',
       category: 'video',
       nodes: [
-        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: '输入描述' } },
-        { id: 'n2', type: 'text-to-video', position: { x: 400, y: 200 }, data: { title: '生成视频' } }
+        { id: 'n1', type: 'text-input', position: { x: 100, y: 200 }, data: { title: t('canvas.templates.nodeTitle.inputDescription') } },
+        { id: 'n2', type: 'text-to-video', position: { x: 400, y: 200 }, data: { title: t('canvas.templates.nodeTitle.generateVideo') } }
       ],
       edges: [{ id: 'e1', source: 'n1', target: 'n2' }]
     },
     {
       id: 'tpl-style-transfer',
-      name: '风格迁移',
-      description: '图片反推提示词后重新生成',
+      name: t('canvas.templates.styleTransfer.name'),
+      description: t('canvas.templates.styleTransfer.desc'),
       icon: '🔄',
       category: 'advanced',
       nodes: [
-        { id: 'n1', type: 'image-input', position: { x: 100, y: 200 }, data: { title: '参考图片' } },
-        { id: 'n2', type: 'llm-image-describe', position: { x: 350, y: 200 }, data: { title: '图片描述', type: 'llm-image-describe' } },
-        { id: 'n3', type: 'text-to-image', position: { x: 600, y: 200 }, data: { title: '风格生成' } }
+        { id: 'n1', type: 'image-input', position: { x: 100, y: 200 }, data: { title: t('canvas.templates.nodeTitle.referenceImage') } },
+        { id: 'n2', type: 'llm-image-describe', position: { x: 350, y: 200 }, data: { title: t('canvas.templates.nodeTitle.imageDescription'), type: 'llm-image-describe' } },
+        { id: 'n3', type: 'text-to-image', position: { x: 600, y: 200 }, data: { title: t('canvas.templates.nodeTitle.styleGenerate') } }
       ],
       edges: [{ id: 'e1', source: 'n1', target: 'n2' }, { id: 'e2', source: 'n2', target: 'n3' }]
     }
@@ -171,7 +173,7 @@ onMounted(() => {
     <div class="templates-panel" @click="handlePanelClick">
       <!-- 头部 -->
       <div class="templates-header">
-        <h2 class="templates-title">📋 工作流模板</h2>
+        <h2 class="templates-title">📋 {{ t('canvas.templates.title') }}</h2>
         <button class="close-btn" @click="handleClose">×</button>
       </div>
       
@@ -192,7 +194,7 @@ onMounted(() => {
       <div class="templates-list">
         <div v-if="loading" class="templates-loading">
           <div class="canvas-loading-spinner"></div>
-          <span>加载中...</span>
+          <span>{{ t('canvas.templates.loading') }}</span>
         </div>
         
         <div 
@@ -207,13 +209,13 @@ onMounted(() => {
             <div class="template-name">{{ template.name }}</div>
             <div class="template-desc">{{ template.description }}</div>
             <div class="template-meta">
-              <span class="node-count">{{ template.nodes?.length || 0 }} 个节点</span>
+              <span class="node-count">{{ t('canvas.templates.nodeCount', { count: template.nodes?.length || 0 }) }}</span>
             </div>
           </div>
         </div>
         
         <div v-if="!loading && filteredTemplates.length === 0" class="templates-empty">
-          暂无模板
+          {{ t('canvas.templates.noTemplates') }}
         </div>
       </div>
     </div>

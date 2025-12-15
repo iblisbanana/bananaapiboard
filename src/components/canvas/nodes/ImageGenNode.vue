@@ -27,12 +27,12 @@ const selectedResolution = ref(props.data.resolution || '1024')
 const selectedAspectRatio = ref(props.data.aspectRatio || '1:1')
 const selectedCount = ref(props.data.count || 1)
 
-// 可用选项
+// 可用选项 - 黑白灰简洁风格
 const models = [
-  { value: 'banana-pro', label: '🍌 Banana Pro', desc: '高质量通用模型' },
-  { value: 'banana-fast', label: '⚡ Banana Fast', desc: '快速生成' },
-  { value: 'banana-anime', label: '🎨 Banana Anime', desc: '动漫风格' },
-  { value: 'banana-realistic', label: '📷 Banana Realistic', desc: '写实风格' }
+  { value: 'banana-pro', label: 'Banana Pro', desc: '高质量通用模型' },
+  { value: 'banana-fast', label: 'Banana Fast', desc: '快速生成' },
+  { value: 'banana-anime', label: 'Banana Anime', desc: '动漫风格' },
+  { value: 'banana-realistic', label: 'Banana Realistic', desc: '写实风格' }
 ]
 
 const resolutions = [
@@ -63,6 +63,16 @@ watch([selectedModel, selectedResolution, selectedAspectRatio, selectedCount],
     })
   }
 )
+
+// 同步选中状态到 canvasStore（确保工具栏正确显示）
+watch(() => props.selected, (isSelected) => {
+  if (isSelected) {
+    if (canvasStore.selectedNodeId !== props.id) {
+      console.log('[ImageGenNode] 同步选中状态到 store:', props.id)
+      canvasStore.selectNode(props.id)
+    }
+  }
+}, { immediate: true })
 
 // 节点尺寸 - 图片生成节点使用正方形
 const nodeWidth = ref(props.data.width || 340)
@@ -115,13 +125,13 @@ const userPoints = computed(() => {
   return (userInfo.value.package_points || 0) + (userInfo.value.points || 0)
 })
 
-// 图片编辑工具
+// 图片编辑工具 - 黑白灰简洁风格
 const editTools = [
-  { icon: '✏️', label: '重绘', action: 'repaint' },
-  { icon: '🧹', label: '擦除', action: 'erase' },
-  { icon: '⬆️', label: '增强', action: 'upscale' },
-  { icon: '✂️', label: '抠图', action: 'cutout' },
-  { icon: '🔲', label: '扩图', action: 'expand' }
+  { icon: '⟲', label: '重绘', action: 'repaint' },
+  { icon: '○', label: '擦除', action: 'erase' },
+  { icon: '↑', label: '增强', action: 'upscale' },
+  { icon: '⊡', label: '抠图', action: 'cutout' },
+  { icon: '⊞', label: '扩图', action: 'expand' }
 ]
 
 // 监听图片加载，自适应尺寸
@@ -359,14 +369,14 @@ function handleAddClick(event) {
         {{ tool.icon }}
       </button>
       <div class="toolbar-divider"></div>
-      <button class="toolbar-btn" title="下载" @click="downloadImage">⬇️</button>
-      <button class="toolbar-btn" title="全屏">↔️</button>
+      <button class="toolbar-btn" title="下载" @click="downloadImage">↓</button>
+      <button class="toolbar-btn" title="全屏">⤢</button>
     </div>
     
     <!-- 节点头部 -->
     <div class="canvas-node-header">
       <div class="canvas-node-title">
-        <span class="icon">🎨</span>
+        <span class="icon">⬡</span>
         {{ data.title || '图片生成' }}
       </div>
       <div class="canvas-node-actions">
@@ -425,7 +435,7 @@ function handleAddClick(event) {
       <!-- 生成控制 -->
       <div class="gen-controls">
         <div class="gen-params">
-          <span class="param-item">🍌 Banana Pro</span>
+          <span class="param-item">Banana Pro</span>
           <span class="param-item">1K</span>
           <span class="param-item">Auto</span>
           <span class="param-item">1x</span>
@@ -433,7 +443,7 @@ function handleAddClick(event) {
         
         <div class="gen-actions">
           <!-- 积分显示 -->
-          <span class="points-cost">💎 {{ pointsCost }}</span>
+          <span class="points-cost">◆ {{ pointsCost }}</span>
           
           <!-- 生成按钮 - 只在任务提交中禁用 -->
           <button 
@@ -442,7 +452,7 @@ function handleAddClick(event) {
             :disabled="isGenerating"
             @click="handleGenerate"
           >
-            {{ isGenerating ? '⏳ 提交中' : '🚀 开始生成' }}
+            {{ isGenerating ? '...' : '→ 生成' }}
           </button>
           
           <!-- 重新生成按钮 -->
@@ -451,7 +461,7 @@ function handleAddClick(event) {
             class="canvas-node-btn secondary"
             @click="handleRegenerate"
           >
-            🔄 重新生成
+            ⟲ 重新生成
           </button>
         </div>
       </div>
@@ -747,16 +757,17 @@ function handleAddClick(event) {
 
 .node-add-btn {
   position: absolute;
-  right: -12px;
+  right: -52px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
+  font-weight: 300;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -766,16 +777,16 @@ function handleAddClick(event) {
   z-index: 10;
 }
 
-.canvas-node:hover .node-add-btn {
+.canvas-node:hover .node-add-btn,
+.image-gen-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 /* 节点内容区域 */
