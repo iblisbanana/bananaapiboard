@@ -9,6 +9,9 @@ import { Handle, Position } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
 import { getLLMConfig, chatWithLLM, chatWithLLMStream } from '@/api/canvas/llm'
 import { getApiUrl, getTenantHeaders } from '@/config/tenant'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   id: String,
@@ -62,6 +65,16 @@ const showPresetDropdown = ref(false) // 功能预设下拉菜单
 const showLanguageDropdown = ref(false) // 语言下拉菜单
 const llmInputRef = ref(null)
 
+// 下拉菜单方向（true = 向上弹出，false = 向下弹出）
+const modelDropdownUp = ref(true)
+const presetDropdownUp = ref(true)
+const languageDropdownUp = ref(true)
+
+// 下拉菜单容器引用
+const modelSelectorRef = ref(null)
+const presetSelectorRef = ref(null)
+const languageSelectorRef = ref(null)
+
 // LLM 配置
 const llmConfig = ref({
   enabled: false,
@@ -97,8 +110,8 @@ const availableModels = computed(() => {
   return [
     { value: 'gemini-2.5-pro', label: 'Gemini 2.5', icon: 'G', pointsCost: 1 },
     { value: 'gemini-3-pro', label: 'Gemini 3 Pro', icon: 'G', pointsCost: 2 },
-    { value: 'gpt-4o', label: 'GPT-4o', icon: '✨', pointsCost: 3 },
-    { value: 'claude-3', label: 'Claude 3', icon: '🤖', pointsCost: 2 }
+    { value: 'gpt-4o', label: 'GPT-4o', icon: 'O', pointsCost: 3 },
+    { value: 'claude-3', label: 'Claude 3', icon: 'C', pointsCost: 2 }
   ]
 })
 
@@ -120,16 +133,42 @@ const currentModelCost = computed(() => {
   return model?.pointsCost || 1
 })
 
+// 格式化积分显示（支持小数点后2位）
+const formattedModelCost = computed(() => {
+  const cost = currentModelCost.value
+  // 如果是整数，直接显示整数
+  if (Number.isInteger(cost)) {
+    return cost.toString()
+  }
+  // 否则显示最多2位小数，去除末尾的0
+  return parseFloat(cost.toFixed(2)).toString()
+})
+
 // 用户积分
 const userPoints = computed(() => {
   if (!userInfo?.value) return 0
   return (userInfo.value.package_points || 0) + (userInfo.value.points || 0)
 })
 
+// 检测下拉菜单方向（基于元素位置和屏幕空间）
+function checkDropdownDirection(element, dropdownHeight = 250) {
+  if (!element) return true // 默认向上
+  const rect = element.getBoundingClientRect()
+  const spaceAbove = rect.top
+  const spaceBelow = window.innerHeight - rect.bottom
+  // 如果下方空间足够或下方空间比上方大，则向下弹出
+  return spaceBelow < dropdownHeight && spaceAbove > spaceBelow
+}
+
 // 切换模型下拉菜单
 function toggleModelDropdown(event) {
   event?.stopPropagation()
+  if (!showModelDropdown.value) {
+    modelDropdownUp.value = checkDropdownDirection(modelSelectorRef.value, 200)
+  }
   showModelDropdown.value = !showModelDropdown.value
+  showPresetDropdown.value = false
+  showLanguageDropdown.value = false
 }
 
 // 选择模型
@@ -156,6 +195,9 @@ const selectedPresetLabel = computed(() => {
 // 切换功能预设下拉菜单
 function togglePresetDropdown(event) {
   event?.stopPropagation()
+  if (!showPresetDropdown.value) {
+    presetDropdownUp.value = checkDropdownDirection(presetSelectorRef.value, 200)
+  }
   showPresetDropdown.value = !showPresetDropdown.value
   showLanguageDropdown.value = false
   showModelDropdown.value = false
@@ -187,6 +229,9 @@ const selectedLanguageLabel = computed(() => {
 // 切换语言下拉菜单
 function toggleLanguageDropdown(event) {
   event?.stopPropagation()
+  if (!showLanguageDropdown.value) {
+    languageDropdownUp.value = checkDropdownDirection(languageSelectorRef.value, 150)
+  }
   showLanguageDropdown.value = !showLanguageDropdown.value
   showPresetDropdown.value = false
   showModelDropdown.value = false
@@ -201,10 +246,36 @@ function selectLanguage(languageCode) {
 // 动态获取上游节点的数据（支持实时更新）
 const upstreamNodes = computed(() => canvasStore.getUpstreamNodes(props.id))
 
-// 从上游节点收集所有图片
-const upstreamImages = computed(() => {
+// 单独收集上游视频 URL（用于显示视频缩略图）
+const upstreamVideoUrls = computed(() => {
+  const videos = []
+  for (const node of upstreamNodes.value) {
+    const nodeType = node.type || ''
+    
+    if (nodeType === 'video' || nodeType === 'video-input' || nodeType === 'video-gen') {
+      if (node.data?.output?.url) {
+        videos.push(node.data.output.url)
+      } else if (node.data?.sourceVideo) {
+        videos.push(node.data.sourceVideo)
+      } else if (node.data?.videoUrl) {
+        videos.push(node.data.videoUrl)
+      }
+    }
+  }
+  return videos
+})
+
+// 单独收集上游图片 URL
+const upstreamImageUrls = computed(() => {
   const images = []
   for (const node of upstreamNodes.value) {
+    const nodeType = node.type || ''
+    
+    // 跳过视频节点
+    if (nodeType === 'video' || nodeType === 'video-input' || nodeType === 'video-gen') {
+      continue
+    }
+    
     // 图片输入节点
     if (node.data?.sourceImages?.length) {
       images.push(...node.data.sourceImages)
@@ -217,6 +288,33 @@ const upstreamImages = computed(() => {
     }
   }
   return images
+})
+
+// 上游媒体类型：'video' | 'image' | 'mixed' | null
+const upstreamMediaType = computed(() => {
+  const hasVideos = upstreamVideoUrls.value.length > 0
+  const hasImages = upstreamImageUrls.value.length > 0
+  
+  if (hasVideos && hasImages) return 'mixed'
+  if (hasVideos) return 'video'
+  if (hasImages) return 'image'
+  return null
+})
+
+// 参考区域标签文本
+const referenceLabel = computed(() => {
+  switch (upstreamMediaType.value) {
+    case 'video': return '参考视频'
+    case 'image': return '参考图片'
+    case 'mixed': return '参考文件'
+    default: return '参考图片'
+  }
+})
+
+// 从上游节点收集所有图片和视频（视频也通过 image_url 传递给大模型）
+const upstreamImages = computed(() => {
+  // 合并视频和图片 URL
+  return [...upstreamVideoUrls.value, ...upstreamImageUrls.value]
 })
 
 // 提取纯文本，去除HTML标签和样式
@@ -606,26 +704,26 @@ function handleLabelKeyDown(event) {
   }
 }
 
-// 快捷操作 - 点击后创建对应的新节点
+// 快捷操作 - 点击后创建对应的新节点（使用翻译键，在模板中翻译）
 const quickActions = [
-  { icon: '✎', label: '自己编写内容', action: () => handlePrepareEdit() },
-  { icon: '▶', label: '文字生视频', action: () => createNextNode('video-gen', '视频生成') },
-  { icon: 'A+', label: '图片反推提示词', action: () => handleImageDescribe() },
-  { icon: '♪', label: '文字生音乐', action: () => createNextNode('audio-gen', '音频生成') }
+  { icon: '✎', labelKey: 'canvas.textNode.writeContent', action: () => handlePrepareEdit() },
+  { icon: '▶', labelKey: 'canvas.textNode.textToVideo', action: () => createNextNode('video-gen', t('canvas.textNode.videoGen')) },
+  { icon: 'A+', labelKey: 'canvas.textNode.imageDescribePrompt', action: () => handleImageDescribe() },
+  { icon: '♪', labelKey: 'canvas.textNode.textToMusic', action: () => createNextNode('audio-gen', t('canvas.textNode.audioGen')) }
 ]
 
-// 格式工具栏按钮
+// 格式工具栏按钮（使用翻译键，在模板中翻译）
 const formatButtons = [
-  { icon: 'B', title: '粗体', action: () => toggleFormat('bold'), format: 'bold', style: 'font-weight: bold' },
-  { icon: 'I', title: '斜体', action: () => toggleFormat('italic'), format: 'italic', style: 'font-style: italic' },
-  { icon: 'U', title: '下划线', action: () => toggleFormat('underline'), format: 'underline', style: 'text-decoration: underline' },
+  { icon: 'B', titleKey: 'canvas.textNode.bold', action: () => toggleFormat('bold'), format: 'bold', style: 'font-weight: bold' },
+  { icon: 'I', titleKey: 'canvas.textNode.italic', action: () => toggleFormat('italic'), format: 'italic', style: 'font-style: italic' },
+  { icon: 'U', titleKey: 'canvas.textNode.underline', action: () => toggleFormat('underline'), format: 'underline', style: 'text-decoration: underline' },
   { type: 'divider' },
-  { icon: 'H₁', title: '标题1', action: () => setFontSize(24) },
-  { icon: 'H₂', title: '标题2', action: () => setFontSize(20) },
-  { icon: 'H₃', title: '标题3', action: () => setFontSize(16) },
+  { icon: 'H₁', titleKey: 'canvas.textNode.heading1', action: () => setFontSize(24) },
+  { icon: 'H₂', titleKey: 'canvas.textNode.heading2', action: () => setFontSize(20) },
+  { icon: 'H₃', titleKey: 'canvas.textNode.heading3', action: () => setFontSize(16) },
   { type: 'divider' },
-  { icon: '⧉', title: '复制', action: () => copyText() },
-  { icon: '⛶', title: '全屏', action: () => toggleFullscreen() }
+  { icon: '⧉', titleKey: 'canvas.textNode.copy', action: () => copyText() },
+  { icon: '⛶', titleKey: 'canvas.textNode.fullscreen', action: () => toggleFullscreen() }
 ]
 
 // 准备编辑（点击"自己编写内容"）
@@ -977,13 +1075,13 @@ let pressStartPos = { x: 0, y: 0 }
 // 左侧快捷操作菜单显示状态
 const showLeftMenu = ref(false)
 
-// 左侧快捷操作列表（添加上游输入）
+// 左侧快捷操作列表（添加上游输入）- 使用翻译键
 const leftQuickActions = [
-  { icon: '✨', label: '提示词润色', action: () => createUpstreamNode('text-input', '提示词润色', 'prompt-enhance') },
-  { icon: 'A+', label: '图片反推', action: () => createUpstreamNode('image-input', '图片反推') },
-  { icon: '🎬', label: '视频反推', action: () => createUpstreamNode('video-input', '视频反推') },
-  { icon: '🎵', label: '音频提取文字', action: () => createUpstreamNode('audio-input', '音频提取文字') },
-  { icon: '📹', label: '视频提取文字', action: () => createUpstreamNode('video-text-extract', '视频提取文字') }
+  { icon: 'A+', labelKey: 'canvas.textNode.promptEnhance', action: () => createUpstreamNode('text-input', t('canvas.textNode.promptEnhance'), 'prompt-enhance') },
+  { icon: '◎', labelKey: 'canvas.textNode.imageReverse', action: () => createUpstreamNode('image-input', t('canvas.textNode.imageReverse')) },
+  { icon: '▷', labelKey: 'canvas.textNode.videoReverse', action: () => createUpstreamNode('video-input', t('canvas.textNode.videoReverse')) },
+  { icon: '♪', labelKey: 'canvas.textNode.audioToText', action: () => createUpstreamNode('audio-input', t('canvas.textNode.audioToText')) },
+  { icon: '◈', labelKey: 'canvas.textNode.videoToText', action: () => createUpstreamNode('video-text-extract', t('canvas.textNode.videoToText')) }
 ]
 
 // 左侧添加按钮 - 单击显示快捷菜单
@@ -1268,7 +1366,7 @@ function handleResizeEnd() {
           class="toolbar-btn"
           :class="{ active: formatState[btn.format] }"
           :style="btn.style"
-          :title="btn.title"
+          :title="t(btn.titleKey)"
           @mousedown.prevent="btn.action"
         >
           {{ btn.icon }}
@@ -1317,7 +1415,7 @@ function handleResizeEnd() {
           @click="action.action"
         >
           <span class="left-menu-icon">{{ action.icon }}</span>
-          <span class="left-menu-label">{{ action.label }}</span>
+          <span class="left-menu-label">{{ t(action.labelKey) }}</span>
         </div>
       </div>
       
@@ -1381,7 +1479,7 @@ function handleResizeEnd() {
         <template v-else>
           <!-- 错误状态 -->
           <div v-if="props.data.status === 'error'" class="text-node-error">
-            <div class="error-icon">⚠️</div>
+            <div class="error-icon">!</div>
             <div class="error-text">{{ props.data.error || '生成失败' }}</div>
             <button class="retry-btn" @click.stop="handleLLMGenerate">重试</button>
           </div>
@@ -1413,15 +1511,15 @@ function handleResizeEnd() {
         
           <!-- 空状态：显示快捷操作 -->
           <div v-else class="text-node-empty">
-            <div class="text-node-hint">尝试：</div>
+            <div class="text-node-hint">{{ t('canvas.textNode.try') }}</div>
             <div 
               v-for="action in quickActions"
-              :key="action.label"
+              :key="action.labelKey"
               class="text-node-action"
               @click.stop="action.action"
             >
               <span class="action-icon">{{ action.icon }}</span>
-              <span class="action-label">{{ action.label }}</span>
+              <span class="action-label">{{ t(action.labelKey) }}</span>
             </div>
           </div>
         </template>
@@ -1461,14 +1559,30 @@ function handleResizeEnd() {
     
     <!-- 底部 LLM 配置面板 - 紧贴节点卡片 -->
     <div v-if="selected" class="llm-config-panel" @click.stop>
-      <!-- 参考图片区域（如果有上游图片） -->
+      <!-- 参考媒体区域（视频/图片/混合） -->
       <div v-if="inheritedImages.length > 0" class="reference-section">
-        <span class="reference-label">参考图片</span>
-        <span class="reference-hint">来自上游节点 · 共{{ inheritedImages.length }}张</span>
+        <span class="reference-label">{{ referenceLabel }}</span>
+        <span class="reference-hint">来自上游节点 · 共{{ inheritedImages.length }}{{ upstreamMediaType === 'video' ? '个' : upstreamMediaType === 'mixed' ? '个' : '张' }}</span>
         <div class="reference-images">
+          <!-- 视频缩略图 -->
           <div 
-            v-for="(img, idx) in inheritedImages.slice(0, 4)" 
-            :key="idx" 
+            v-for="(videoUrl, idx) in upstreamVideoUrls.slice(0, 4)" 
+            :key="'video-' + idx" 
+            class="reference-image-item reference-video-item"
+          >
+            <video 
+              :src="videoUrl" 
+              preload="metadata"
+              muted
+              class="reference-video-thumb"
+              @loadeddata="$event.target.currentTime = 0.1"
+            ></video>
+            <div class="video-badge">▶</div>
+          </div>
+          <!-- 图片缩略图 -->
+          <div 
+            v-for="(img, idx) in upstreamImageUrls.slice(0, 4 - Math.min(upstreamVideoUrls.length, 4))" 
+            :key="'img-' + idx" 
             class="reference-image-item"
           >
             <img :src="img" :alt="`参考图 ${idx + 1}`" />
@@ -1503,13 +1617,13 @@ function handleResizeEnd() {
       <div class="llm-controls">
         <div class="controls-left">
           <!-- 模型选择器 -->
-          <div class="model-selector" @click="toggleModelDropdown">
+          <div ref="modelSelectorRef" class="model-selector" @click="toggleModelDropdown">
             <span class="model-icon llm-icon">{{ selectedModelIcon }}</span>
             <span class="model-name">{{ selectedModelLabel }}</span>
             <span class="dropdown-arrow">▾</span>
             
             <!-- 下拉菜单 -->
-            <div v-if="showModelDropdown" class="model-dropdown" @click.stop>
+            <div v-if="showModelDropdown" class="model-dropdown" :class="{ 'dropdown-up': modelDropdownUp, 'dropdown-down': !modelDropdownUp }" @click.stop>
               <div 
                 v-for="model in availableModels" 
                 :key="model.value"
@@ -1519,18 +1633,18 @@ function handleResizeEnd() {
               >
                 <span class="model-option-icon llm-icon">{{ model.icon }}</span>
                 <span class="model-option-name">{{ model.label }}</span>
-                <span v-if="model.pointsCost" class="model-option-cost">💎{{ model.pointsCost }}</span>
+                <span v-if="model.pointsCost" class="model-option-cost">◆{{ model.pointsCost }}</span>
               </div>
             </div>
           </div>
           
           <!-- 功能预设选择器 -->
-          <div class="preset-selector" @click="togglePresetDropdown">
+          <div ref="presetSelectorRef" class="preset-selector" @click="togglePresetDropdown">
             <span class="preset-name">{{ selectedPresetLabel }}</span>
             <span class="dropdown-arrow">▾</span>
             
             <!-- 预设下拉菜单 -->
-            <div v-if="showPresetDropdown" class="preset-dropdown" @click.stop>
+            <div v-if="showPresetDropdown" class="preset-dropdown" :class="{ 'dropdown-up': presetDropdownUp, 'dropdown-down': !presetDropdownUp }" @click.stop>
               <div 
                 class="preset-option"
                 :class="{ active: !selectedPreset }"
@@ -1551,12 +1665,12 @@ function handleResizeEnd() {
           </div>
           
           <!-- 语言选择器 -->
-          <div class="language-selector" @click="toggleLanguageDropdown">
+          <div ref="languageSelectorRef" class="language-selector" @click="toggleLanguageDropdown">
             <span class="language-name">{{ selectedLanguageLabel }}</span>
             <span class="dropdown-arrow">▾</span>
             
             <!-- 语言下拉菜单 -->
-            <div v-if="showLanguageDropdown" class="language-dropdown" @click.stop>
+            <div v-if="showLanguageDropdown" class="language-dropdown" :class="{ 'dropdown-up': languageDropdownUp, 'dropdown-down': !languageDropdownUp }" @click.stop>
               <div 
                 v-for="language in availableLanguages" 
                 :key="language.code"
@@ -1574,6 +1688,11 @@ function handleResizeEnd() {
           <!-- 生成次数 -->
           <span class="generate-count">1x</span>
           
+          <!-- 积分消耗显示 -->
+          <span class="points-cost-display">
+            {{ formattedModelCost }} 积分
+          </span>
+          
           <!-- 生成按钮 -->
           <button 
             class="generate-btn"
@@ -1581,7 +1700,7 @@ function handleResizeEnd() {
             title="开始生成 (Enter)"
             @click="handleLLMGenerate"
           >
-            <span v-if="isGenerating">⏳</span>
+            <span v-if="isGenerating">...</span>
             <span v-else>↑</span>
           </button>
         </div>
@@ -2116,13 +2235,13 @@ function handleResizeEnd() {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
   font-weight: 300;
   cursor: pointer;
   display: flex;
@@ -2133,24 +2252,24 @@ function handleResizeEnd() {
   z-index: 10;
 }
 
-.text-node-card-wrapper:hover .node-add-btn {
+.text-node-card-wrapper:hover .node-add-btn,
+.text-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 .node-add-btn-left {
-  left: -12px;
+  left: -52px;
 }
 
 .node-add-btn-right {
-  right: -12px;
+  right: -52px;
 }
 
 /* ========== 左侧快捷操作菜单 ========== */
@@ -2277,6 +2396,33 @@ function handleResizeEnd() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* 视频缩略图样式 */
+.reference-video-item {
+  position: relative;
+}
+
+.reference-video-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+.video-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
 }
 
 .more-images-badge {
@@ -2433,10 +2579,20 @@ function handleResizeEnd() {
   font-weight: 500;
 }
 
+/* 下拉菜单通用方向样式 */
+.dropdown-up {
+  bottom: calc(100% + 8px);
+  top: auto;
+}
+
+.dropdown-down {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
 /* 预设下拉菜单 */
 .preset-dropdown {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 0;
   min-width: 160px;
   max-height: 300px;
@@ -2499,7 +2655,6 @@ function handleResizeEnd() {
 /* 语言下拉菜单 */
 .language-dropdown {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 0;
   min-width: 140px;
   max-height: 300px;
@@ -2584,7 +2739,6 @@ function handleResizeEnd() {
 /* 模型下拉菜单 */
 .model-dropdown {
   position: absolute;
-  bottom: calc(100% + 8px);
   left: 0;
   min-width: 220px;
   background: var(--canvas-bg-tertiary, #1a1a1a);
@@ -2645,6 +2799,21 @@ function handleResizeEnd() {
   color: var(--canvas-text-secondary, #a0a0a0);
   font-size: 14px;
   font-weight: 500;
+}
+
+/* 积分消耗显示 - 黑白灰风格 */
+.points-cost-display {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(251, 191, 36, 0.1);
+  padding: 4px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
 /* 生成按钮 */

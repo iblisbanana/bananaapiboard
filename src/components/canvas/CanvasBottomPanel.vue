@@ -11,8 +11,9 @@
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
 import { getNodeConfig } from '@/config/canvas/nodeTypes'
-import { generateImageFromText, generateImageFromImage, pollTaskStatus } from '@/api/canvas/nodes'
+import { generateImageFromText, generateImageFromImage, pollTaskStatus, uploadImages } from '@/api/canvas/nodes'
 import { getLLMConfig, chatWithLLM, describeImage } from '@/api/canvas/llm'
+import { getApiUrl } from '@/config/tenant'
 
 const canvasStore = useCanvasStore()
 const userInfo = inject('userInfo')
@@ -310,6 +311,120 @@ async function handleLLMChat(nodeId) {
   }
 }
 
+// 判断是否是七牛云 CDN URL（公开可访问的 URL）
+function isQiniuCdnUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  return str.includes('files.nananobanana.cn') || 
+         str.includes('qncdn.') ||
+         str.includes('.qiniucdn.com') ||
+         str.includes('.qbox.me')
+}
+
+// 判断是否需要重新上传的本地/相对路径 URL
+function needsReupload(url) {
+  if (!url || typeof url !== 'string') return false
+  if (url.startsWith('/api/images/file/')) return true
+  if (url.includes('nanobanana') && url.includes('/api/images/file/')) return true
+  if (url.includes('localhost') && url.includes('/api/images/file/')) return true
+  return false
+}
+
+// 将本地/相对路径的图片重新上传到七牛云获取公开 URL
+async function reuploadToCloud(url) {
+  console.log('[BottomPanel] 重新上传图片到云端:', url)
+  
+  try {
+    let fetchUrl = url
+    if (url.startsWith('/api/')) {
+      fetchUrl = getApiUrl(url)
+    }
+    
+    const response = await fetch(fetchUrl, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`获取图片失败: ${response.status}`)
+    }
+    
+    const blob = await response.blob()
+    const file = new File([blob], `reupload_${Date.now()}.png`, { type: blob.type || 'image/png' })
+    
+    const urls = await uploadImages([file])
+    if (urls && urls.length > 0) {
+      console.log('[BottomPanel] 重新上传成功，新 URL:', urls[0])
+      return urls[0]
+    }
+    throw new Error('上传返回空 URL')
+  } catch (error) {
+    console.error('[BottomPanel] 重新上传失败:', error)
+    return url
+  }
+}
+
+// 确保所有 URL 都是 AI 模型可以访问的
+async function ensureAccessibleUrls(imageUrls) {
+  const accessibleUrls = []
+  
+  for (const url of imageUrls) {
+    if (isQiniuCdnUrl(url)) {
+      accessibleUrls.push(url)
+    } else if (needsReupload(url)) {
+      const newUrl = await reuploadToCloud(url)
+      accessibleUrls.push(newUrl)
+    } else if (url.startsWith('http://') || url.startsWith('https://')) {
+      accessibleUrls.push(url)
+    } else if (url.startsWith('/api/') || url.startsWith('/storage/')) {
+      const fullUrl = getApiUrl(url)
+      if (needsReupload(fullUrl)) {
+        const newUrl = await reuploadToCloud(url)
+        accessibleUrls.push(newUrl)
+      } else {
+        accessibleUrls.push(fullUrl)
+      }
+    } else {
+      accessibleUrls.push(url)
+    }
+  }
+  
+  return accessibleUrls
+}
+
+// 获取上游节点的实时图片数据（直接从 store 获取，确保数据最新）
+function getUpstreamImagesRealtime(nodeId) {
+  const upstreamImages = []
+  const upstreamEdges = canvasStore.edges.filter(e => e.target === nodeId)
+  
+  console.log('[BottomPanel] getUpstreamImagesRealtime - 检查上游边数:', upstreamEdges.length)
+  
+  for (const edge of upstreamEdges) {
+    // 直接从 store 的 nodes 数组中获取最新数据
+    const sourceNode = canvasStore.nodes.find(n => n.id === edge.source)
+    if (!sourceNode) continue
+    
+    console.log('[BottomPanel] 检查上游节点:', {
+      id: sourceNode.id,
+      type: sourceNode.type,
+      hasOutput: !!sourceNode.data?.output,
+      outputUrls: sourceNode.data?.output?.urls
+    })
+    
+    // 优先级：output.urls > output.url > sourceImages
+    if (sourceNode.data?.output?.urls?.length > 0) {
+      upstreamImages.push(...sourceNode.data.output.urls)
+    } else if (sourceNode.data?.output?.url) {
+      upstreamImages.push(sourceNode.data.output.url)
+    } else if (sourceNode.data?.sourceImages?.length > 0) {
+      upstreamImages.push(...sourceNode.data.sourceImages)
+    }
+  }
+  
+  console.log('[BottomPanel] 实时获取上游图片总数:', upstreamImages.length)
+  return upstreamImages
+}
+
 // 处理图片生成
 async function handleImageGenerate(nodeId, nodeType) {
   // 更新节点状态为处理中
@@ -319,15 +434,27 @@ async function handleImageGenerate(nodeId, nodeType) {
   })
   
   try {
-    // 获取继承的图片（如果有）
+    // 直接从 store 获取上游节点的最新图片数据
+    const realtimeImages = getUpstreamImagesRealtime(nodeId)
+    // 也获取 inheritedData 作为后备
     const inheritedImages = canvasStore.selectedNode.data.inheritedData?.urls || []
+    // 优先使用实时获取的数据
+    const finalImages = realtimeImages.length > 0 ? realtimeImages : inheritedImages
+    
+    console.log('[BottomPanel] 实时获取的参考图:', realtimeImages.length, '张')
+    console.log('[BottomPanel] inheritedData 的参考图:', inheritedImages.length, '张')
+    console.log('[BottomPanel] 最终使用的参考图:', finalImages.length, '张')
     
     let result
-    if (nodeType === 'image-to-image' || inheritedImages.length > 0) {
+    if (nodeType === 'image-to-image' || finalImages.length > 0) {
+      // 🔥 关键：确保所有 URL 都是 AI 模型可以访问的（七牛云 CDN URL）
+      const accessibleUrls = await ensureAccessibleUrls(finalImages)
+      console.log('[BottomPanel] 处理后的可访问 URLs:', accessibleUrls.length, '张')
+      
       // 图生图
       result = await generateImageFromImage({
         prompt: inputText.value,
-        images: inheritedImages,
+        images: accessibleUrls,
         model: selectedModel.value,
         size: selectedSize.value,
         aspectRatio: selectedAspectRatio.value
@@ -713,9 +840,13 @@ function handleKeyDown(event) {
   flex: 1;
 }
 
+/* 模型积分显示 - 黑白灰风格 */
 .model-option-cost {
-  color: var(--canvas-accent-banana, #fbbf24);
+  color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 /* 生成次数 */

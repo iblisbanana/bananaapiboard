@@ -11,7 +11,11 @@
 import { ref, computed, inject, watch, onMounted } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
-import { getTenantHeaders, isModelEnabled, getModelDisplayName } from '@/config/tenant'
+import { getTenantHeaders, isModelEnabled, getModelDisplayName, getApiUrl } from '@/config/tenant'
+import { uploadImages } from '@/api/canvas/nodes'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   id: String,
@@ -170,6 +174,8 @@ const nodeHeight = ref(props.data.height || 280)
 const isResizing = ref(false)
 const resizeHandle = ref(null)
 const resizeStart = ref({ x: 0, y: 0, width: 0, height: 0 })
+// 用于 resize 节流的 requestAnimationFrame ID
+let resizeRafId = null
 
 // 节点样式类
 const nodeClass = computed(() => ({
@@ -183,14 +189,46 @@ const nodeClass = computed(() => ({
   'has-output': hasOutput.value // 有输出时使用无边框设计
 }))
 
-// 节点内容样式
-const contentStyle = computed(() => ({
-  width: `${nodeWidth.value}px`,
-  minHeight: `${nodeHeight.value}px`
-}))
-
 // 是否有输出
 const hasOutput = computed(() => !!props.data.output?.url)
+
+// 处理视频 URL，确保使用相对路径（避免跨域问题）
+const normalizedVideoUrl = computed(() => {
+  const url = props.data.output?.url
+  if (!url) return ''
+  
+  // 如果已经是相对路径，直接返回
+  if (url.startsWith('/api/')) return url
+  
+  // 如果是完整 URL，提取相对路径部分
+  const match = url.match(/\/api\/images\/file\/[a-zA-Z0-9-]+/)
+  if (match) {
+    return match[0]
+  }
+  
+  // 其他情况保持原样
+  return url
+})
+
+// 节点内容样式（有输出时不设置 min-height，让视频自适应）
+const contentStyle = computed(() => {
+  if (hasOutput.value) {
+    return { width: `${nodeWidth.value}px` }
+  }
+  return {
+    width: `${nodeWidth.value}px`,
+    minHeight: `${nodeHeight.value}px`
+  }
+})
+
+// 视频容器样式（根据选择的比例设置）
+const videoWrapperStyle = computed(() => {
+  const ratio = props.data.aspectRatio || selectedAspectRatio.value || '16:9'
+  if (ratio === '9:16') {
+    return { aspectRatio: '9 / 16' }
+  }
+  return { aspectRatio: '16 / 9' }
+})
 
 // 进度百分比（从 progress 字符串中提取数字）
 const progressPercent = computed(() => {
@@ -236,6 +274,20 @@ const hasUpstream = computed(() => {
 })
 
 // 收集上游节点的所有图片（不考虑顺序）
+// 所有可能输出图片的节点类型
+const IMAGE_NODE_TYPES = [
+  'image-input',      // 图片输入节点
+  'image',            // 通用图片节点
+  'image-gen',        // 图片生成节点
+  'text-to-image',    // 文生图节点
+  'image-to-image',   // 图生图节点
+  'image-repaint',    // 局部重绘
+  'image-erase',      // 智能擦除
+  'image-upscale',    // 超分放大
+  'image-cutout',     // 智能抠图
+  'image-expand'      // 图片扩展
+]
+
 function collectUpstreamImages() {
   const upstreamImages = []
   const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
@@ -245,7 +297,7 @@ function collectUpstreamImages() {
     if (!sourceNode) continue
     
     // 图片节点：获取图片
-    if (sourceNode.type === 'image-input' || sourceNode.type === 'image' || sourceNode.type === 'image-gen') {
+    if (IMAGE_NODE_TYPES.includes(sourceNode.type)) {
       // 优先使用输出结果
       if (sourceNode.data?.output?.urls?.length > 0) {
         upstreamImages.push(...sourceNode.data.output.urls)
@@ -347,8 +399,16 @@ function getUpstreamData() {
       }
     }
     
-    // 图片节点：获取图片
-    if (sourceNode.type === 'image-input' || sourceNode.type === 'image' || sourceNode.type === 'image-gen') {
+    // 图片节点：获取图片（使用统一的图片节点类型列表）
+    if (IMAGE_NODE_TYPES.includes(sourceNode.type)) {
+      console.log('[VideoNode] 检测到图片节点:', {
+        type: sourceNode.type,
+        id: sourceNode.id,
+        outputUrls: sourceNode.data?.output?.urls,
+        outputUrl: sourceNode.data?.output?.url,
+        sourceImages: sourceNode.data?.sourceImages
+      })
+      
       // 优先使用输出结果
       if (sourceNode.data?.output?.urls?.length > 0) {
         images = [...images, ...sourceNode.data.output.urls]
@@ -362,6 +422,7 @@ function getUpstreamData() {
     }
   }
   
+  console.log('[VideoNode] getUpstreamData 结果:', { prompts, images })
   return { prompts, images }
 }
 
@@ -383,6 +444,7 @@ const pointsCost = computed(() => {
   return modelConfig[selectedDuration.value] || 20
 })
 
+
 // 用户积分
 const userPoints = computed(() => {
   if (!userInfo?.value) return 0
@@ -398,21 +460,21 @@ const modeLabel = computed(() => {
   return '文生视频'
 })
 
-// 快捷操作
+// 快捷操作 - 使用翻译键
 const quickActions = [
   { 
     icon: '✎',
-    label: '文生视频', 
+    labelKey: 'canvas.videoNode.textToVideo', 
     action: () => handleTextToVideo()
   },
   { 
     icon: '▢',
-    label: '图生视频', 
+    labelKey: 'canvas.videoNode.imageToVideo', 
     action: () => handleImageToVideo()
   },
   { 
     icon: '▶',
-    label: '首尾帧生视频', 
+    labelKey: 'canvas.videoNode.keyframesToVideo', 
     action: () => handleKeyframesToVideo()
   }
 ]
@@ -628,6 +690,107 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// ========== URL 可访问性处理（确保 AI 模型可访问参考图片） ==========
+
+// 判断是否是七牛云 CDN URL（公开可访问的 URL）
+function isQiniuCdnUrl(str) {
+  if (!str || typeof str !== 'string') return false
+  return str.includes('files.nananobanana.cn') || 
+         str.includes('qncdn.') ||
+         str.includes('.qiniucdn.com') ||
+         str.includes('.qbox.me')
+}
+
+// 判断是否是需要重新上传的本地/相对路径 URL
+function needsReupload(url) {
+  if (!url || typeof url !== 'string') return false
+  // 相对路径需要重新上传
+  if (url.startsWith('/api/images/file/')) return true
+  // 本地服务器 URL 需要重新上传（AI 模型无法访问）
+  if (url.includes('nanobanana') && url.includes('/api/images/file/')) return true
+  if (url.includes('localhost') && url.includes('/api/images/file/')) return true
+  return false
+}
+
+// 将本地/相对路径的图片重新上传到七牛云获取公开 URL
+async function reuploadToCloud(url) {
+  console.log('[VideoNode] 重新上传图片到云端:', url)
+  
+  try {
+    // 获取图片内容
+    let fetchUrl = url
+    if (url.startsWith('/api/')) {
+      // 相对路径，转换为完整 URL
+      fetchUrl = getApiUrl(url)
+    }
+    
+    console.log('[VideoNode] 获取图片:', fetchUrl)
+    const response = await fetch(fetchUrl, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`获取图片失败: ${response.status}`)
+    }
+    
+    const blob = await response.blob()
+    const file = new File([blob], `reupload_${Date.now()}.png`, { type: blob.type || 'image/png' })
+    
+    // 重新上传到服务器（服务器会上传到七牛云）
+    const urls = await uploadImages([file])
+    if (urls && urls.length > 0) {
+      console.log('[VideoNode] 重新上传成功，新 URL:', urls[0])
+      return urls[0]
+    }
+    
+    throw new Error('上传返回空结果')
+  } catch (error) {
+    console.error('[VideoNode] 重新上传失败:', error)
+    // 回退到原始 URL
+    if (url.startsWith('/api/')) {
+      return getApiUrl(url)
+    }
+    return url
+  }
+}
+
+// 确保所有图片 URL 都是 AI 模型可访问的公开 URL
+async function ensureAccessibleUrls(imageUrls) {
+  const accessibleUrls = []
+  
+  for (const url of imageUrls) {
+    if (isQiniuCdnUrl(url)) {
+      // 已经是七牛云 URL，直接使用
+      console.log('[VideoNode] 使用七牛云 URL:', url.substring(0, 60))
+      accessibleUrls.push(url)
+    } else if (needsReupload(url)) {
+      // 需要重新上传到云端
+      console.log('[VideoNode] 需要重新上传:', url.substring(0, 60))
+      const newUrl = await reuploadToCloud(url)
+      accessibleUrls.push(newUrl)
+    } else if (url.startsWith('http://') || url.startsWith('https://')) {
+      // 其他 HTTP URL，假设可访问
+      accessibleUrls.push(url)
+    } else if (url.startsWith('/api/') || url.startsWith('/storage/')) {
+      // 相对路径，检查是否需要重新上传
+      if (needsReupload(url)) {
+        const newUrl = await reuploadToCloud(url)
+        accessibleUrls.push(newUrl)
+      } else {
+        const fullUrl = getApiUrl(url)
+        accessibleUrls.push(fullUrl)
+      }
+    } else {
+      // 其他格式（如 base64），尝试直接使用
+      accessibleUrls.push(url)
+    }
+  }
+  
+  return accessibleUrls
+}
+
 // 单次生成请求
 async function sendGenerateRequest(finalPrompt, finalImages) {
   const token = localStorage.getItem('token')
@@ -668,6 +831,173 @@ async function sendGenerateRequest(finalPrompt, finalImages) {
   return data
 }
 
+// 创建新的视频节点用于接收新任务（当前节点正在生成中时使用）
+function createNewOutputNode() {
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return null
+  
+  const stackOffset = 20 // 偏移量
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const newNodePosition = {
+    x: currentNode.position.x + stackOffset,
+    y: currentNode.position.y + stackOffset
+  }
+  
+  canvasStore.addNode({
+    id: newNodeId,
+    type: 'video',
+    position: newNodePosition,
+    data: {
+      title: t('canvas.nodes.video'),
+      status: 'idle',
+      prompt: promptText.value,
+      model: selectedModel.value,
+      aspectRatio: selectedAspectRatio.value,
+      duration: selectedDuration.value,
+      generationMode: generationMode.value,
+      referenceImages: referenceImages.value,
+      // 复制上游连接信息
+      hasUpstream: props.data.hasUpstream,
+      inheritedData: props.data.inheritedData,
+      imageOrder: props.data.imageOrder
+    }
+  })
+  
+  // 复制上游连接到新节点
+  const upstreamEdges = canvasStore.edges.filter(e => e.target === props.id)
+  upstreamEdges.forEach(edge => {
+    canvasStore.addEdge({
+      id: `edge_${edge.source}_${newNodeId}`,
+      source: edge.source,
+      target: newNodeId,
+      sourceHandle: edge.sourceHandle,
+      targetHandle: edge.targetHandle
+    })
+  })
+  
+  console.log('[VideoNode] 创建新输出节点:', newNodeId)
+  return newNodeId
+}
+
+// 单个节点执行生成任务（后台轮询，不阻塞UI）
+async function executeNodeGeneration(nodeId, finalPrompt, finalImages, taskIndex) {
+  try {
+    canvasStore.updateNodeData(nodeId, { 
+      status: 'processing',
+      progress: '排队中...'
+    })
+    
+    const result = await sendGenerateRequest(finalPrompt, finalImages)
+    const taskId = result.task_id || result.id
+    
+    if (taskId) {
+      console.log(`[VideoNode] 任务 ${taskIndex + 1} 已提交:`, taskId)
+      
+      // 后台轮询，不阻塞
+      pollVideoTaskForNode(taskId, nodeId).catch(error => {
+        console.error(`[VideoNode] 任务 ${taskIndex + 1} 轮询失败:`, error)
+        canvasStore.updateNodeData(nodeId, {
+          status: 'error',
+          error: error.message
+        })
+      })
+      
+      // 任务已提交，立即返回 taskId（不等待轮询结果）
+      return taskId
+    } else if (result.video_url || result.url) {
+      canvasStore.updateNodeData(nodeId, {
+        status: 'success',
+        output: {
+          type: 'video',
+          url: result.video_url || result.url
+        }
+      })
+      return result.video_url || result.url
+    }
+    
+    throw new Error('未获取到生成结果')
+  } catch (error) {
+    console.error(`[VideoNode] 任务 ${taskIndex + 1} 失败:`, error)
+    canvasStore.updateNodeData(nodeId, {
+      status: 'error',
+      error: error.message
+    })
+    return null
+  }
+}
+
+// 轮询视频任务状态（针对特定节点）
+async function pollVideoTaskForNode(taskId, nodeId) {
+  const token = localStorage.getItem('token')
+  const MAX_POLL_TIME = 600000 // 10分钟超时
+  const POLL_INTERVAL = 4000 // 4秒轮询一次
+  const startTime = Date.now()
+  
+  return new Promise((resolve, reject) => {
+    const poll = async () => {
+      try {
+        // 检查超时
+        if (Date.now() - startTime > MAX_POLL_TIME) {
+          reject(new Error('生成超时，请稍后在历史记录中查看'))
+          return
+        }
+        
+        const response = await fetch(`/api/videos/task/${taskId}`, {
+          headers: { 
+            ...getTenantHeaders(), 
+            ...(token ? { Authorization: `Bearer ${token}` } : {}) 
+          }
+        })
+        
+        if (!response.ok) {
+          reject(new Error('查询任务状态失败'))
+          return
+        }
+        
+        const data = await response.json()
+        console.log(`[VideoNode] 节点 ${nodeId} 任务状态:`, data)
+        
+        // 更新进度
+        canvasStore.updateNodeData(nodeId, { 
+          progress: data.progress || '生成中...'
+        })
+        
+        // 检查完成状态
+        const status = (data.status || '').toLowerCase()
+        if (status === 'completed' || status === 'success') {
+          const videoUrl = data.video_url || data.url
+          if (videoUrl) {
+            canvasStore.updateNodeData(nodeId, {
+              status: 'success',
+              output: {
+                type: 'video',
+                url: videoUrl
+              }
+            })
+            resolve(videoUrl)
+            return
+          }
+        }
+        
+        // 检查失败状态
+        if (status === 'failed' || status === 'failure' || status === 'error') {
+          reject(new Error(data.fail_reason || '视频生成失败'))
+          return
+        }
+        
+        // 继续轮询
+        setTimeout(poll, POLL_INTERVAL)
+        
+      } catch (error) {
+        reject(error)
+      }
+    }
+    
+    // 开始轮询
+    poll()
+  })
+}
+
 // 开始生成
 async function handleGenerate() {
   // 动态获取上游节点的最新数据
@@ -686,9 +1016,9 @@ async function handleGenerate() {
   }
   
   // 合并参考图片：上游图片 > 继承图片 > 已设置的参考图
-  const finalImages = upstreamData.images.length > 0 ? upstreamData.images : referenceImages.value
+  let finalImages = upstreamData.images.length > 0 ? upstreamData.images : referenceImages.value
   
-  console.log('[VideoNode] 生成参数:', { 
+  console.log('[VideoNode] 生成参数（处理前）:', { 
     userPrompt,
     upstreamPrompts: upstreamData.prompts,
     upstreamPromptText,
@@ -697,12 +1027,20 @@ async function handleGenerate() {
     finalImages,
     model: selectedModel.value,
     duration: selectedDuration.value,
-    count: selectedCount.value
+    count: selectedCount.value,
+    currentStatus: props.data.status
   })
   
   if (!finalPrompt && finalImages.length === 0) {
     alert('请输入提示词或连接参考图片')
     return
+  }
+  
+  // 🔥 关键：确保所有参考图片都是 AI 模型可访问的公开 URL
+  if (finalImages.length > 0) {
+    console.log('[VideoNode] 处理参考图片 URL，确保可访问性...')
+    finalImages = await ensureAccessibleUrls(finalImages)
+    console.log('[VideoNode] 处理后的可访问 URLs:', finalImages)
   }
   
   // 检查总积分是否足够（单次消耗 * 次数）
@@ -722,49 +1060,87 @@ async function handleGenerate() {
   errorMessage.value = ''
   
   const generateCount = selectedCount.value
-  canvasStore.updateNodeData(props.id, { 
-    status: 'processing', 
-    progress: generateCount > 1 ? `准备发送 ${generateCount} 个请求...` : '排队中'
+  
+  // 🔥 核心逻辑：如果当前节点正在处理中，创建新节点来接收新任务
+  let targetNodeId = props.id
+  if (props.data.status === 'processing') {
+    const newNodeId = createNewOutputNode()
+    if (newNodeId) {
+      targetNodeId = newNodeId
+      // 选中新创建的节点
+      canvasStore.selectNode(newNodeId)
+      console.log('[VideoNode] 当前节点正在生成，创建新节点接收任务:', newNodeId)
+    }
+  }
+  
+  // 多批次生成时，创建堆叠的输出节点
+  let allNodeIds = [targetNodeId]
+  if (generateCount > 1) {
+    // 对于目标节点创建额外的堆叠节点
+    const currentNode = canvasStore.nodes.find(n => n.id === targetNodeId)
+    if (currentNode) {
+      for (let i = 1; i < generateCount; i++) {
+        const stackedNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        const stackOffset = 8
+        canvasStore.addNode({
+          id: stackedNodeId,
+          type: 'video',
+          position: {
+            x: currentNode.position.x + stackOffset * i,
+            y: currentNode.position.y + stackOffset * i
+          },
+          zIndex: -i,
+          data: {
+            title: `Video ${i + 1}`,
+            status: 'pending',
+            isStackedNode: true,
+            stackIndex: i,
+            parentNodeId: targetNodeId,
+            prompt: promptText.value,
+            model: selectedModel.value,
+            aspectRatio: selectedAspectRatio.value,
+            duration: selectedDuration.value,
+            generationMode: generationMode.value,
+            referenceImages: referenceImages.value
+          }
+        })
+        allNodeIds.push(stackedNodeId)
+      }
+      console.log('[VideoNode] 创建堆叠节点:', allNodeIds.slice(1))
+    }
+  }
+  
+  // 更新目标节点状态
+  canvasStore.updateNodeData(targetNodeId, { 
+    status: 'processing',
+    progress: generateCount > 1 ? `并行生成 ${generateCount} 个视频...` : '排队中...'
   })
   
   try {
-    // 多次请求，每次间隔5秒
-    for (let i = 0; i < generateCount; i++) {
-      if (i > 0) {
-        canvasStore.updateNodeData(props.id, { 
-          progress: `等待发送第 ${i + 1}/${generateCount} 个请求...`
-        })
-        await delay(CONCURRENT_INTERVAL)
-      }
-      
-      console.log(`[VideoNode] 发送第 ${i + 1}/${generateCount} 个生成请求...`)
-      canvasStore.updateNodeData(props.id, { 
-        progress: `发送第 ${i + 1}/${generateCount} 个请求...`
-      })
-      
-      const data = await sendGenerateRequest(finalPrompt, finalImages)
-      const taskId = data.task_id || data.id
-      console.log(`[VideoNode] 第 ${i + 1} 个任务已提交:`, taskId)
-      
-      // 最后一个请求开始后台轮询（不阻塞UI）
-      if (i === generateCount - 1) {
-        if (taskId) {
-          // 任务提交成功，立即恢复按钮状态
-          isGenerating.value = false
-          // 后台轮询，不阻塞
-          pollVideoTask(taskId)
-        } else if (data.video_url || data.url) {
-          canvasStore.updateNodeData(props.id, {
-            status: 'success',
-            output: {
-              type: 'video',
-              url: data.video_url || data.url
-            }
-          })
-          isGenerating.value = false
+    // 提交所有任务（任务提交后立即返回，不等待完成）
+    const submitPromises = allNodeIds.map((nodeId, index) => {
+      return new Promise(async (resolve) => {
+        // 间隔发送请求
+        if (index > 0) {
+          await delay(CONCURRENT_INTERVAL * index)
         }
-      }
+        const result = await executeNodeGeneration(nodeId, finalPrompt, finalImages, index)
+        resolve(result)
+      })
+    })
+    
+    // 等待所有任务提交完成（不是等待任务结果完成）
+    const allResults = await Promise.all(submitPromises)
+    const successResults = allResults.filter(r => r !== null)
+    
+    console.log('[VideoNode] 全部任务已提交:', successResults.length, '/', generateCount)
+    
+    if (successResults.length === 0) {
+      throw new Error('所有任务提交都失败了')
     }
+    
+    // 任务提交成功后，立即恢复按钮状态，允许用户继续发起新任务
+    isGenerating.value = false
     
     // 刷新用户积分
     window.dispatchEvent(new CustomEvent('user-info-updated'))
@@ -772,7 +1148,7 @@ async function handleGenerate() {
   } catch (error) {
     console.error('[VideoNode] 生成失败:', error)
     errorMessage.value = error.message || '生成失败'
-    canvasStore.updateNodeData(props.id, {
+    canvasStore.updateNodeData(targetNodeId, {
       status: 'error',
       error: error.message
     })
@@ -891,22 +1267,42 @@ function handleResizeStart(handle, event) {
 function handleResizeMove(event) {
   if (!isResizing.value) return
   
-  const deltaX = event.clientX - resizeStart.value.x
-  const deltaY = event.clientY - resizeStart.value.y
-  
-  const viewport = canvasStore.viewport
-  const zoom = viewport.zoom || 1
-  
-  if (resizeHandle.value === 'right' || resizeHandle.value === 'corner') {
-    nodeWidth.value = Math.max(320, resizeStart.value.width + deltaX / zoom)
+  // 使用 requestAnimationFrame 节流，提高拖拽流畅度
+  if (resizeRafId) {
+    cancelAnimationFrame(resizeRafId)
   }
   
-  if (resizeHandle.value === 'bottom' || resizeHandle.value === 'corner') {
-    nodeHeight.value = Math.max(200, resizeStart.value.height + deltaY / zoom)
-  }
+  const clientX = event.clientX
+  const clientY = event.clientY
+  
+  resizeRafId = requestAnimationFrame(() => {
+    if (!isResizing.value) return
+    
+    const deltaX = clientX - resizeStart.value.x
+    const deltaY = clientY - resizeStart.value.y
+    
+    const viewport = canvasStore.viewport
+    const zoom = viewport.zoom || 1
+    
+    if (resizeHandle.value === 'right' || resizeHandle.value === 'corner') {
+      nodeWidth.value = Math.max(320, resizeStart.value.width + deltaX / zoom)
+    }
+    
+    if (resizeHandle.value === 'bottom' || resizeHandle.value === 'corner') {
+      nodeHeight.value = Math.max(200, resizeStart.value.height + deltaY / zoom)
+    }
+    
+    resizeRafId = null
+  })
 }
 
 function handleResizeEnd() {
+  // 取消未执行的 RAF
+  if (resizeRafId) {
+    cancelAnimationFrame(resizeRafId)
+    resizeRafId = null
+  }
+  
   isResizing.value = false
   resizeHandle.value = null
   
@@ -1277,18 +1673,88 @@ function handleAddRightClick(event) {
   event.stopPropagation()
 }
 
-// 视频加载完成后显示第一帧
+// 视频播放器引用
+const videoPlayerRef = ref(null)
+
+// 全屏预览状态
+const isFullscreenPreview = ref(false)
+
+// 视频元数据加载完成
 function handleVideoLoaded(event) {
   const video = event.target
+  console.log('[VideoNode] 视频元数据加载完成:', {
+    originalUrl: props.data.output?.url?.substring(0, 60),
+    normalizedUrl: normalizedVideoUrl.value?.substring(0, 60),
+    duration: video.duration,
+    videoWidth: video.videoWidth,
+    videoHeight: video.videoHeight
+  })
   // 设置到第一帧的位置（0.1秒处，确保不是完全黑屏）
-  video.currentTime = 0.1
+  if (video.currentTime === 0) {
+    video.currentTime = 0.1
+  }
 }
 
-// 下载视频
-function downloadVideo() {
-  if (props.data.output?.url) {
-    window.open(props.data.output.url, '_blank')
+// 视频可以播放时
+function handleVideoCanPlay(event) {
+  const video = event.target
+  console.log('[VideoNode] 视频可以播放:', {
+    currentTime: video.currentTime,
+    readyState: video.readyState
+  })
+  // 确保显示第一帧
+  if (video.currentTime === 0) {
+    video.currentTime = 0.1
   }
+}
+
+// 视频加载错误处理
+function handleVideoError(event) {
+  const video = event.target
+  const error = video.error
+  console.error('[VideoNode] 视频加载失败:', {
+    originalUrl: props.data.output?.url?.substring(0, 60),
+    normalizedUrl: normalizedVideoUrl.value?.substring(0, 60),
+    errorCode: error?.code,
+    errorMessage: error?.message
+  })
+}
+
+// 鼠标进入视频区域 - 自动播放（带声音）
+function handleVideoMouseEnter() {
+  const video = videoPlayerRef.value
+  if (video && video.paused) {
+    video.muted = false // 悬停播放时取消静音，播放声音
+    video.play().catch(e => {
+      // 如果带声音播放失败（浏览器自动播放策略），则尝试静音播放
+      console.log('[VideoNode] 带声音播放失败，尝试静音播放:', e.message)
+      video.muted = true
+      video.play().catch(err => {
+        console.log('[VideoNode] 静音播放也失败:', err.message)
+      })
+    })
+  }
+}
+
+// 鼠标离开视频区域 - 暂停并回到第一帧
+function handleVideoMouseLeave() {
+  const video = videoPlayerRef.value
+  if (video && !video.paused) {
+    video.pause()
+    video.currentTime = 0.1 // 回到第一帧
+  }
+}
+
+// 打开全屏预览
+function openFullscreenPreview() {
+  if (normalizedVideoUrl.value) {
+    isFullscreenPreview.value = true
+  }
+}
+
+// 关闭全屏预览
+function closeFullscreenPreview() {
+  isFullscreenPreview.value = false
 }
 </script>
 
@@ -1338,7 +1804,8 @@ function downloadVideo() {
       <div 
         class="node-card" 
         :class="{ 
-          'is-processing': data.status === 'processing'
+          'is-processing': data.status === 'processing',
+          'is-stacked': data.isStackedNode
         }"
         :style="contentStyle"
       >
@@ -1379,22 +1846,35 @@ function downloadVideo() {
           />
         </svg>
         
-        <!-- 视频输出预览（无边框设计） -->
-        <div v-if="hasOutput" class="video-output-wrapper">
+        <!-- 视频输出预览（无边框设计，悬停自动播放） -->
+        <div 
+          v-if="hasOutput" 
+          class="video-output-wrapper"
+          :style="videoWrapperStyle"
+          @mouseenter="handleVideoMouseEnter"
+          @mouseleave="handleVideoMouseLeave"
+        >
           <video 
-            :src="data.output.url" 
-            controls
+            ref="videoPlayerRef"
+            :src="normalizedVideoUrl" 
             preload="auto"
+            muted
+            loop
             class="video-player-output"
             playsinline
             @loadedmetadata="handleVideoLoaded"
+            @canplay="handleVideoCanPlay"
+            @error="handleVideoError"
           ></video>
+          <!-- 播放指示器已移除：首帧不显示播放按钮 -->
           <div class="video-overlay-actions">
-            <button class="overlay-action-btn" @click="downloadVideo" title="下载视频">
-              ⬇️
+            <button class="overlay-action-btn" @click.stop="openFullscreenPreview" title="全屏预览">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
             </button>
-            <button class="overlay-action-btn" @click="handleRegenerate" title="重新生成">
-              🔄
+            <button class="overlay-action-btn" @click.stop="handleRegenerate" title="重新生成">
+              ⟲
             </button>
           </div>
         </div>
@@ -1443,15 +1923,15 @@ function downloadVideo() {
           
           <!-- 空状态 - 快捷操作 -->
           <div v-else class="empty-state">
-            <div class="hint-text">尝试：</div>
+            <div class="hint-text">{{ t('canvas.textNode.try') }}</div>
             <div 
               v-for="action in quickActions"
-              :key="action.label"
+              :key="action.labelKey"
               class="quick-action"
               @click.stop="action.action"
             >
               <span class="action-icon">{{ action.icon }}</span>
-              <span class="action-label">{{ action.label }}</span>
+              <span class="action-label">{{ t(action.labelKey) }}</span>
             </div>
           </div>
         </div>
@@ -1498,6 +1978,23 @@ function downloadVideo() {
       class="hidden-file-input"
       @change="handleFrameFileChange"
     />
+    
+    <!-- 全屏预览模态框 -->
+    <Teleport to="body">
+      <div v-if="isFullscreenPreview" class="fullscreen-preview-overlay" @click="closeFullscreenPreview">
+        <div class="fullscreen-preview-container" @click.stop>
+          <video 
+            :src="normalizedVideoUrl" 
+            controls 
+            autoplay
+            class="fullscreen-video"
+          ></video>
+          <button class="fullscreen-close-btn" @click="closeFullscreenPreview">
+            ✕
+          </button>
+        </div>
+      </div>
+    </Teleport>
     
     <!-- 底部配置面板（选中时显示） -->
     <div v-if="selected" class="config-panel" @mousedown.stop>
@@ -1616,13 +2113,18 @@ function downloadVideo() {
             {{ selectedCount }}x
           </span>
           
+          <!-- 积分消耗显示 -->
+          <span class="points-cost-display">
+            {{ pointsCost }} 积分
+          </span>
+          
           <!-- 生成按钮 - 只在任务提交中禁用，节点生成中仍可点击发起新任务 -->
           <button 
             class="generate-btn"
             :disabled="isGenerating"
             @click="handleGenerate"
           >
-            <span v-if="isGenerating" class="btn-loading">⏳</span>
+            <span v-if="isGenerating" class="btn-loading">...</span>
             <svg v-else class="btn-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7"/>
             </svg>
@@ -1710,16 +2212,25 @@ function downloadVideo() {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
 }
 
-/* 有输出时 - 无边框设计 */
+/* 有输出时 - 无边框设计，自适应内容高度 */
 .video-node.has-output .node-card {
   background: transparent;
   border: none;
   overflow: visible;
   padding: 0;
+  min-height: auto !important;
+  height: auto !important;
 }
 
 .video-node.has-output:hover .node-card {
   border-color: transparent;
+}
+
+/* 有输出时选中状态 - 保持无边框，只显示视频容器的发光效果 */
+.video-node.has-output.selected .node-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 /* ========== 彗星环绕发光特效（生成中） ========== */
@@ -1759,6 +2270,19 @@ function downloadVideo() {
     0 0 10px rgba(74, 222, 128, 0.2),
     0 0 20px rgba(74, 222, 128, 0.1),
     inset 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
+/* 堆叠节点样式 */
+.node-card.is-stacked {
+  opacity: 0.85;
+  transform: scale(0.98);
+  transition: all 0.3s ease;
+}
+
+.node-card.is-stacked:hover {
+  opacity: 1;
+  transform: scale(1);
+  z-index: 10;
 }
 
 /* 主内容区域 */
@@ -1872,22 +2396,37 @@ function downloadVideo() {
   color: var(--canvas-accent-primary, #3b82f6);
 }
 
-/* ========== 视频输出预览（无边框设计） ========== */
+/* ========== 视频输出预览（无边框设计，悬停自动播放） ========== */
 .video-output-wrapper {
   position: relative;
   width: 100%;
   border-radius: 12px;
   overflow: hidden;
   background: #000;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+  /* aspect-ratio 通过 style 绑定动态设置 */
+}
+
+/* 选中状态 - 视频容器发光效果 */
+.video-node.selected .video-output-wrapper {
+  box-shadow: 
+    0 4px 20px rgba(0, 0, 0, 0.4),
+    0 0 0 2px var(--canvas-accent-primary, #3b82f6),
+    0 0 20px rgba(59, 130, 246, 0.3);
 }
 
 .video-player-output {
   width: 100%;
+  height: 100%;
+  object-fit: contain;
   display: block;
   background: #000;
   border-radius: 12px;
 }
+
+/* 播放指示器已移除 */
 
 /* 悬浮操作按钮 */
 .video-overlay-actions {
@@ -2464,6 +3003,21 @@ function downloadVideo() {
   color: var(--canvas-accent-primary, #3b82f6);
 }
 
+/* 积分消耗显示 - 黑白灰风格 */
+.points-cost-display {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(251, 191, 36, 0.1);
+  padding: 4px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
 .generate-btn {
   width: 36px;
   height: 36px;
@@ -2517,13 +3071,13 @@ function downloadVideo() {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
   font-weight: 300;
   cursor: pointer;
   display: flex;
@@ -2534,24 +3088,24 @@ function downloadVideo() {
   z-index: 10;
 }
 
-.node-wrapper:hover .node-add-btn {
+.node-wrapper:hover .node-add-btn,
+.video-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 .node-add-btn-left {
-  left: -12px;
+  left: -52px;
 }
 
 .node-add-btn-right {
-  right: -12px;
+  right: -52px;
 }
 
 /* Resize Handles */
@@ -2610,5 +3164,72 @@ function downloadVideo() {
   opacity: 0;
   overflow: hidden;
   z-index: -1;
+}
+
+/* ========== 全屏预览模态框 ========== */
+.fullscreen-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(12px);
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fullscreen-preview-container {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  animation: scaleIn 0.25s ease;
+}
+
+@keyframes scaleIn {
+  from { 
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to { 
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.fullscreen-video {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 12px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
+  background: #000;
+}
+
+.fullscreen-close-btn {
+  position: absolute;
+  top: -48px;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.fullscreen-close-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: scale(1.1);
 }
 </style>

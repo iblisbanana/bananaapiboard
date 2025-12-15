@@ -15,10 +15,22 @@ import NodeContextMenu from '@/components/canvas/NodeContextMenu.vue'
 import CanvasContextMenu from '@/components/canvas/CanvasContextMenu.vue'
 import WorkflowTemplates from '@/components/canvas/WorkflowTemplates.vue'
 import GroupToolbar from '@/components/canvas/GroupToolbar.vue'
+import ImageToolbar from '@/components/canvas/ImageToolbar.vue'
 import SaveWorkflowDialog from '@/components/canvas/SaveWorkflowDialog.vue'
+import WorkflowPanel from '@/components/canvas/WorkflowPanel.vue'
+import WorkflowTabs from '@/components/canvas/WorkflowTabs.vue'
+import AssetPanel from '@/components/canvas/AssetPanel.vue'
+import HistoryPanel from '@/components/canvas/HistoryPanel.vue'
+import ImageEditMode from '@/components/canvas/ImageEditMode.vue'
+import InplaceImageEditor from '@/components/canvas/InplaceImageEditor.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import OnboardingGuide from '@/components/canvas/OnboardingGuide.vue'
+import { useI18n } from '@/i18n'
 
 // 导入画布样式
 import '@/styles/canvas.css'
+
+const { t } = useI18n()
 
 const router = useRouter()
 const route = useRoute()
@@ -37,6 +49,23 @@ const showHelp = ref(false)
 
 // 保存工作流对话框
 const showSaveDialog = ref(false)
+
+// 工作流面板
+const showWorkflowPanel = ref(false)
+
+// 资产面板
+const showAssetPanel = ref(false)
+
+// 历史记录面板
+const showHistoryPanel = ref(false)
+
+// 新手引导
+const showOnboarding = ref(false)
+
+// 自动保存定时器
+const autoSaveInterval = ref(null)
+const lastAutoSave = ref(null)
+const autoSaveEnabled = ref(false) // 只有保存过的工作流才启用自动保存
 
 // 模式切换
 const isTransitioning = ref(false)
@@ -107,9 +136,45 @@ const selectedGroupNode = computed(() => {
   return null
 })
 
+// 选中的图像节点（用于显示图像工具栏）
+const selectedImageNode = computed(() => {
+  const selectedId = canvasStore.selectedNodeId
+  console.log('[Canvas] selectedImageNode 检查 - selectedId:', selectedId)
+  if (!selectedId) return null
+  
+  const node = canvasStore.nodes.find(n => n.id === selectedId)
+  console.log('[Canvas] selectedImageNode 检查 - node:', node?.id, node?.type, node?.data)
+  if (!node) return null
+  
+  // 检查是否是图像类型节点（包括所有可能的图像类型）
+  const imageTypes = ['image', 'image-input', 'image-gen', 'text-to-image', 'image-to-image']
+  if (imageTypes.includes(node.type)) {
+    // 检查是否有图片内容（输出图片或源图片）
+    const hasOutput = node.data?.output?.urls?.length > 0 || node.data?.output?.url
+    const hasSource = node.data?.sourceImages?.length > 0
+    
+    console.log('[Canvas] 图像节点检查:', { hasOutput, hasSource, output: node.data?.output, sourceImages: node.data?.sourceImages })
+    
+    if (hasOutput || hasSource) {
+      console.log('[Canvas] ✅ 检测到选中图像节点，应显示工具栏:', node.id, node.type)
+      return node
+    }
+  } else {
+    console.log('[Canvas] 节点类型不匹配:', node.type, '不在', imageTypes)
+  }
+  return null
+})
+
 // 显示编组工具栏
 const showGroupToolbar = computed(() => {
   return selectedGroupNode.value !== null
+})
+
+// 显示图像工具栏（当有图像节点被选中且没有显示编组工具栏时）
+const showImageToolbar = computed(() => {
+  // 如果正在显示编组工具栏，不显示图像工具栏
+  if (showGroupToolbar.value) return false
+  return selectedImageNode.value !== null
 })
 
 // 编组工具栏位置
@@ -133,6 +198,30 @@ const groupToolbarPosition = computed(() => {
   return { x: Math.max(250, x), y }
 })
 
+// 图像工具栏位置（在图像节点上方居中）
+const imageToolbarPosition = computed(() => {
+  if (!selectedImageNode.value) return { x: 0, y: 0 }
+  
+  const node = selectedImageNode.value
+  const viewport = canvasStore.viewport
+  
+  const container = document.querySelector('.canvas-board')
+  if (!container) return { x: window.innerWidth / 2, y: 100 }
+  
+  const rect = container.getBoundingClientRect()
+  const nodeWidth = node.data?.width || 380
+  const labelHeight = 28 // 节点标签高度
+  
+  // 计算节点在屏幕上的位置
+  const x = rect.left + (node.position.x * viewport.zoom) + viewport.x + (nodeWidth * viewport.zoom) / 2
+  const y = rect.top + (node.position.y * viewport.zoom) + viewport.y - 10 // 在节点上方10px
+  
+  return { 
+    x: Math.max(300, Math.min(x, window.innerWidth - 300)), 
+    y: Math.max(80, y) 
+  }
+})
+
 // 提供用户信息给子组件
 provide('userInfo', me)
 
@@ -149,6 +238,265 @@ function closeTemplates() {
 // 提供打开模板函数给子组件
 provide('openTemplates', openTemplates)
 
+// 打开工作流面板
+function openWorkflowPanel() {
+  showWorkflowPanel.value = true
+}
+
+// 关闭工作流面板
+function closeWorkflowPanel() {
+  showWorkflowPanel.value = false
+}
+
+// 工作流加载后的回调（在新标签中打开）
+function handleWorkflowLoaded(workflow) {
+  console.log('[Canvas] 工作流已加载:', workflow.name)
+  // 在新标签中打开
+  canvasStore.openWorkflowInNewTab(workflow)
+  
+  // 如果是已保存的工作流，启用自动保存
+  if (workflow.id && !autoSaveEnabled.value) {
+    autoSaveEnabled.value = true
+    startAutoSave()
+  }
+}
+
+// 新建工作流的回调
+function handleWorkflowNew() {
+  console.log('[Canvas] 新建工作流')
+  canvasStore.createTab()
+}
+
+// 标签切换
+function handleTabSwitch(tab) {
+  canvasStore.switchToTab(tab.id)
+}
+
+// 标签关闭
+function handleTabClose(tabId) {
+  canvasStore.closeTab(tabId)
+}
+
+// 新建标签
+function handleTabNew() {
+  canvasStore.createTab()
+}
+
+// 标签保存
+function handleTabSave(tabId) {
+  // 切换到该标签并打开保存对话框
+  canvasStore.switchToTab(tabId)
+  showSaveDialog.value = true
+}
+
+// 提供打开工作流面板函数给子组件
+provide('openWorkflowPanel', openWorkflowPanel)
+
+// 打开资产面板
+function openAssetPanel() {
+  showAssetPanel.value = true
+}
+
+// 关闭资产面板
+function closeAssetPanel() {
+  showAssetPanel.value = false
+}
+
+// 资产插入到画布
+function handleAssetInsert(asset) {
+  console.log('[Canvas] 插入资产:', asset)
+  
+  // 根据资产类型创建相应的节点
+  const position = {
+    x: 300,
+    y: window.innerHeight / 2 - 100
+  }
+  
+  let nodeType = 'text-input'
+  let nodeData = {}
+  
+  switch (asset.type) {
+    case 'text':
+      nodeType = 'text-input'
+      nodeData = {
+        title: asset.name || '文本资产',
+        text: asset.content || '',  // TextNode 使用 text 字段
+        fromAsset: true,
+        assetId: asset.id
+      }
+      break
+    case 'image':
+      nodeType = 'image-input'
+      nodeData = {
+        title: asset.name || t('canvas.nodes.imageAsset'),
+        label: asset.name || t('canvas.nodes.image'),
+        // ImageNode 使用 sourceImages 数组存储上传的图片
+        sourceImages: [asset.url],
+        nodeRole: 'source',
+        fromAsset: true,
+        assetId: asset.id
+      }
+      break
+    case 'video':
+      nodeType = 'video-input'
+      nodeData = {
+        title: asset.name || t('canvas.nodes.videoAsset'),
+        label: asset.name || t('canvas.nodes.video'),
+        // VideoNode 使用 output.url 显示视频
+        // 设置 status 为 success 触发视频预览显示
+        status: 'success',
+        output: {
+          type: 'video',
+          url: asset.url
+        },
+        fromAsset: true,
+        assetId: asset.id
+      }
+      break
+    case 'audio':
+      nodeType = 'audio-input'
+      nodeData = {
+        title: asset.name || t('canvas.nodes.audioAsset'),
+        label: asset.name || t('canvas.nodes.audio'),
+        // AudioNode 支持 audioUrl 和 output.url
+        audioUrl: asset.url,
+        status: 'success',
+        output: {
+          type: 'audio',
+          url: asset.url
+        },
+        fromAsset: true,
+        assetId: asset.id
+      }
+      break
+  }
+  
+  canvasStore.addNode({
+    type: nodeType,
+    position,
+    data: nodeData
+  })
+}
+
+// 提供打开资产面板函数给子组件
+provide('openAssetPanel', openAssetPanel)
+
+// 打开历史记录面板
+function openHistoryPanel() {
+  showHistoryPanel.value = true
+}
+
+// 关闭历史记录面板
+function closeHistoryPanel() {
+  showHistoryPanel.value = false
+}
+
+// 历史记录应用到画布（同时加载工作流节点）
+function handleHistoryApply(historyItem) {
+  console.log('[Canvas] 应用历史记录:', historyItem)
+  
+  // 根据历史记录类型创建相应的节点
+  const position = {
+    x: 300,
+    y: window.innerHeight / 2 - 100
+  }
+  
+  let nodeType = 'image-input'
+  let nodeData = {}
+  
+  switch (historyItem.type) {
+    case 'image':
+      nodeType = 'image-input'
+      nodeData = {
+        title: historyItem.name || t('canvas.historyPanel.imageResult'),
+        label: historyItem.name || t('canvas.nodes.image'),
+        sourceImages: [historyItem.url],
+        nodeRole: 'source',
+        fromHistory: true,
+        historyId: historyItem.id,
+        prompt: historyItem.prompt,
+        model: historyItem.model
+      }
+      break
+    case 'video':
+      nodeType = 'video-input'
+      nodeData = {
+        title: historyItem.name || t('canvas.historyPanel.videoResult'),
+        label: historyItem.name || t('canvas.nodes.video'),
+        status: 'success',
+        output: {
+          type: 'video',
+          url: historyItem.url
+        },
+        fromHistory: true,
+        historyId: historyItem.id,
+        prompt: historyItem.prompt,
+        model: historyItem.model
+      }
+      break
+    case 'audio':
+      nodeType = 'audio-input'
+      nodeData = {
+        title: historyItem.name || t('canvas.historyPanel.audioResult'),
+        label: historyItem.name || t('canvas.nodes.audio'),
+        audioUrl: historyItem.url,
+        status: 'success',
+        output: {
+          type: 'audio',
+          url: historyItem.url
+        },
+        fromHistory: true,
+        historyId: historyItem.id,
+        prompt: historyItem.prompt,
+        model: historyItem.model
+      }
+      break
+  }
+  
+  // 添加节点
+  const newNode = canvasStore.addNode({
+    type: nodeType,
+    position,
+    data: nodeData
+  })
+  
+  // 如果有工作流快照，尝试恢复相关节点
+  if (historyItem.workflow_snapshot) {
+    try {
+      const snapshot = typeof historyItem.workflow_snapshot === 'string' 
+        ? JSON.parse(historyItem.workflow_snapshot) 
+        : historyItem.workflow_snapshot
+      
+      if (snapshot.nodes && Array.isArray(snapshot.nodes)) {
+        console.log('[Canvas] 恢复工作流快照节点:', snapshot.nodes.length)
+        // 在新节点右侧依次添加快照中的节点
+        let offsetX = 450
+        snapshot.nodes.forEach((snapshotNode, index) => {
+          if (snapshotNode.type && snapshotNode.data) {
+            canvasStore.addNode({
+              type: snapshotNode.type,
+              position: {
+                x: position.x + offsetX,
+                y: position.y + (index * 50)
+              },
+              data: {
+                ...snapshotNode.data,
+                fromSnapshot: true
+              }
+            })
+            offsetX += 400
+          }
+        })
+      }
+    } catch (error) {
+      console.error('[Canvas] 解析工作流快照失败:', error)
+    }
+  }
+}
+
+// 提供打开历史记录面板函数给子组件
+provide('openHistoryPanel', openHistoryPanel)
+
 // 打开保存对话框
 function openSaveDialog() {
   showSaveDialog.value = true
@@ -162,8 +510,72 @@ function closeSaveDialog() {
 // 保存成功回调
 function handleWorkflowSaved(workflow) {
   console.log('[Canvas] 工作流保存成功:', workflow)
-  // 可以显示成功提示
-  alert(`工作流 "${workflow.name}" 保存成功！`)
+  
+  // 更新当前标签名称和工作流ID
+  canvasStore.updateCurrentTabName(workflow.name)
+  canvasStore.markCurrentTabSaved(workflow.id)
+  
+  // 启用自动保存
+  if (!autoSaveEnabled.value) {
+    autoSaveEnabled.value = true
+    startAutoSave()
+  }
+  
+  lastAutoSave.value = new Date()
+}
+
+// 自动保存函数
+async function autoSaveWorkflow() {
+  const currentTab = canvasStore.getCurrentTab()
+  
+  // 只有已保存过的工作流（有workflowId）才自动保存
+  if (!currentTab || !currentTab.workflowId) {
+    return
+  }
+  
+  // 如果没有变更，跳过
+  if (!currentTab.hasChanges) {
+    return
+  }
+  
+  try {
+    const { saveWorkflow } = await import('@/api/canvas/workflow')
+    const workflowData = canvasStore.exportWorkflow()
+    
+    await saveWorkflow({
+      id: currentTab.workflowId,
+      name: currentTab.name,
+      ...workflowData
+    })
+    
+    canvasStore.markCurrentTabSaved()
+    lastAutoSave.value = new Date()
+    console.log('[Canvas] 自动保存成功:', currentTab.name)
+  } catch (error) {
+    console.error('[Canvas] 自动保存失败:', error)
+  }
+}
+
+// 启动自动保存定时器（每5分钟）
+function startAutoSave() {
+  if (autoSaveInterval.value) {
+    clearInterval(autoSaveInterval.value)
+  }
+  
+  // 每5分钟自动保存
+  autoSaveInterval.value = setInterval(() => {
+    autoSaveWorkflow()
+  }, 5 * 60 * 1000)
+  
+  console.log('[Canvas] 自动保存已启用，间隔: 5分钟')
+}
+
+// 停止自动保存
+function stopAutoSave() {
+  if (autoSaveInterval.value) {
+    clearInterval(autoSaveInterval.value)
+    autoSaveInterval.value = null
+  }
 }
 
 // 加载用户信息
@@ -179,6 +591,30 @@ async function loadUserInfo() {
   } finally {
     loading.value = false
   }
+}
+
+// 检查并显示新手引导
+function checkOnboarding() {
+  const completed = localStorage.getItem('canvasOnboardingCompleted')
+  const enabled = localStorage.getItem('canvasOnboardingEnabled')
+  
+  // 如果从未完成过（新用户），或者用户启用了每次提示
+  if (!completed || enabled === 'true') {
+    // 延迟显示，让画布先渲染完成
+    setTimeout(() => {
+      showOnboarding.value = true
+    }, 500)
+  }
+}
+
+// 关闭新手引导
+function closeOnboarding() {
+  showOnboarding.value = false
+}
+
+// 新手引导完成回调
+function handleOnboardingComplete({ skipped }) {
+  console.log('[Canvas] 新手引导已完成', skipped ? '(跳过)' : '(完整)')
 }
 
 // 处理画布双击 - 双击空白处弹出节点选择器
@@ -203,22 +639,22 @@ function handleCanvasDoubleClick(event) {
   )
 }
 
-// 处理点击空白处
-function handleCanvasClick(event) {
-  // 如果刚刚通过连线拖拽打开了选择器，忽略这次点击
-  if (canvasStore.preventSelectorClose) {
-    console.log('[Canvas] 忽略点击，因为刚刚通过连线打开了选择器')
-    return
+// 处理画布空白区域点击（来自 CanvasBoard 的 pane-click 事件）
+function handlePaneClick(event) {
+  // 点击空白处时关闭资产面板
+  if (showAssetPanel.value) {
+    showAssetPanel.value = false
   }
   
-  // 关闭菜单
-  if (canvasStore.isNodeSelectorOpen) {
-    canvasStore.closeNodeSelector()
+  // 点击空白处时关闭历史记录面板
+  if (showHistoryPanel.value) {
+    showHistoryPanel.value = false
   }
-  canvasStore.closeAllContextMenus()
   
-  // 点击空白处时隐藏底部面板
-  canvasStore.isBottomPanelVisible = false
+  // 点击空白处时关闭工作流面板
+  if (showWorkflowPanel.value) {
+    showWorkflowPanel.value = false
+  }
 }
 
 // 处理画布右键菜单的上传事件
@@ -398,8 +834,73 @@ function handleSaveWorkflow() {
   alert('工作流已保存（功能开发中）')
 }
 
+// ========== 图像工具栏事件处理 ==========
+// 重绘（预留接口）
+function handleImageRepaint(data) {
+  console.log('[Canvas] 图像重绘', data)
+  // TODO: 接入重绘API
+  alert('重绘功能开发中，请稍后...')
+}
+
+// 擦除（预留接口）
+function handleImageErase(data) {
+  console.log('[Canvas] 图像擦除', data)
+  // TODO: 接入擦除API
+  alert('擦除功能开发中，请稍后...')
+}
+
+// 增强（预留接口）
+function handleImageEnhance(data) {
+  console.log('[Canvas] 图像增强', data)
+  // TODO: 接入图像增强/超分辨率API
+  alert('增强功能开发中，请稍后...')
+}
+
+// 抠图（预留接口）
+function handleImageCutout(data) {
+  console.log('[Canvas] 图像抠图', data)
+  // TODO: 接入抠图/去背景API
+  alert('抠图功能开发中，请稍后...')
+}
+
+// 扩图（预留接口）
+function handleImageExpand(data) {
+  console.log('[Canvas] 图像扩图', data)
+  // TODO: 接入扩图/outpainting API
+  alert('扩图功能开发中，请稍后...')
+}
+
+// 标注（预留接口）
+function handleImageAnnotate(data) {
+  console.log('[Canvas] 图像标注', data)
+  // TODO: 打开标注工具
+  alert('标注功能开发中，请稍后...')
+}
+
+// 裁剪（预留接口，可后续实现裁剪组件）
+function handleImageCrop(data) {
+  console.log('[Canvas] 图像裁剪', data)
+  // TODO: 打开裁剪工具
+  alert('裁剪功能开发中，请稍后...')
+}
+
+// 下载
+function handleImageDownload(data) {
+  console.log('[Canvas] 图像下载', data)
+  // 下载功能已在 ImageToolbar 组件中实现
+}
+
+// 放大预览
+function handleImagePreview(data) {
+  console.log('[Canvas] 图像放大预览', data)
+  // 预览功能已在 ImageToolbar 组件中实现
+}
+
 onMounted(async () => {
   await loadUserInfo()
+  
+  // 初始化默认标签
+  canvasStore.initDefaultTab()
   
   // 检查URL参数，如果有load参数则加载工作流
   const loadWorkflowId = route.query.load
@@ -411,15 +912,8 @@ onMounted(async () => {
       if (result.workflow) {
         const workflow = result.workflow
         
-        // 设置工作流元信息
-        canvasStore.workflowMeta = {
-          id: workflow.id,
-          name: workflow.name,
-          description: workflow.description
-        }
-        
-        // 加载工作流到画布
-        canvasStore.loadWorkflow(workflow)
+        // 在新标签中打开工作流
+        canvasStore.openWorkflowInNewTab(workflow)
       }
     } catch (error) {
       console.error('[Canvas] 加载工作流失败:', error)
@@ -442,11 +936,15 @@ onMounted(async () => {
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'))
     })
+    
+    // 检查是否需要显示新手引导
+    checkOnboarding()
   }, 150)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeyDown)
+  stopAutoSave()
 })
 </script>
 
@@ -457,7 +955,7 @@ onUnmounted(() => {
       <div v-if="isTransitioning" class="transition-overlay">
         <div class="transition-content">
           <div class="transition-spinner"></div>
-          <span>切换中...</span>
+          <span>{{ t('canvas.switching') }}</span>
         </div>
       </div>
     </Transition>
@@ -485,16 +983,16 @@ onUnmounted(() => {
       <div v-if="showModePopup" class="mode-popup-overlay" @click.self="closeModePopup">
         <div class="mode-popup">
           <div class="mode-popup-header">
-            <span class="mode-popup-title">切换模式</span>
+            <span class="mode-popup-title">{{ t('canvas.switchMode') }}</span>
             <button class="mode-popup-close" @click="closeModePopup">×</button>
           </div>
           <div class="mode-popup-content">
-            <p>确定要切换到新手模式吗？</p>
-            <p class="mode-popup-hint">新手模式提供更简洁的界面，适合快速创作</p>
+            <p>{{ t('canvas.switchModeQuestion') }}</p>
+            <p class="mode-popup-hint">{{ t('canvas.switchModeHint') }}</p>
           </div>
           <div class="mode-popup-actions">
-            <button class="mode-popup-btn cancel" @click="closeModePopup">取消</button>
-            <button class="mode-popup-btn confirm" @click="confirmSwitchToSimpleMode">切换为新手模式</button>
+            <button class="mode-popup-btn cancel" @click="closeModePopup">{{ t('common.cancel') }}</button>
+            <button class="mode-popup-btn confirm" @click="confirmSwitchToSimpleMode">{{ t('canvas.switchToSimpleMode') }}</button>
           </div>
         </div>
       </div>
@@ -504,20 +1002,32 @@ onUnmounted(() => {
     <div v-if="loading || !canvasReady" class="canvas-loading-screen">
       <div class="canvas-loading">
         <div class="canvas-loading-spinner"></div>
-        <span>{{ loading ? '加载中...' : '准备画布...' }}</span>
+        <span>{{ loading ? t('canvas.loading') : t('canvas.preparingCanvas') }}</span>
       </div>
     </div>
     
     <!-- 画布主体 -->
-    <div v-else class="canvas-container" @click="handleCanvasClick">
+    <div v-else class="canvas-container">
       <!-- 无限画布 - 使用 key 强制在就绪后重新挂载 -->
-      <CanvasBoard :key="'canvas-board-' + canvasReady" @dblclick="handleCanvasDoubleClick" />
+      <CanvasBoard :key="'canvas-board-' + canvasReady" @dblclick="handleCanvasDoubleClick" @pane-click="handlePaneClick" />
+      
+      <!-- 顶部标签栏 - 仅在有标签时显示 -->
+      <div v-if="canvasStore.workflowTabs.length > 0" class="tabs-container">
+        <WorkflowTabs
+          :tabs="canvasStore.workflowTabs"
+          :active-tab-id="canvasStore.activeTabId"
+          @switch="handleTabSwitch"
+          @close="handleTabClose"
+          @new="handleTabNew"
+          @save="handleTabSave"
+        />
+      </div>
       
       <!-- 左侧工具栏 -->
       <CanvasToolbar @open-save-dialog="openSaveDialog" />
       
-      <!-- 空白状态引导 -->
-      <CanvasEmptyState v-if="canvasStore.isEmpty" />
+      <!-- 空白状态引导 - 当画布为空或没有标签时显示 -->
+      <CanvasEmptyState v-if="canvasStore.isEmpty || canvasStore.workflowTabs.length === 0" />
       
       <!-- 缩放控制 -->
       <div class="canvas-zoom-controls">
@@ -526,50 +1036,56 @@ onUnmounted(() => {
         <button class="canvas-zoom-btn" @click="() => {}">+</button>
       </div>
       
-      <!-- 帮助按钮 -->
-      <button class="canvas-help-btn" title="帮助" @click="showHelp = true">?</button>
+      <!-- 右上角控制区域 -->
+      <div class="canvas-top-right-controls">
+        <!-- 语言切换 -->
+        <LanguageSwitcher :isDark="true" direction="down" :compact="true" />
+        
+        <!-- 帮助按钮 -->
+        <button class="canvas-help-btn" :title="t('common.help')" @click="showHelp = true">?</button>
+      </div>
       
       <!-- 帮助弹窗 -->
       <div v-if="showHelp" class="canvas-help-modal" @click.self="showHelp = false">
         <div class="canvas-help-content">
           <div class="canvas-help-header">
-            <h3>🎨 画布操作指南</h3>
+            <h3>🎨 {{ t('canvas.helpGuide') }}</h3>
             <button class="canvas-help-close" @click="showHelp = false">×</button>
           </div>
           <div class="canvas-help-body">
             <div class="help-section">
-              <h4>🖱️ 鼠标操作</h4>
+              <h4>🖱️ {{ t('canvas.mouseOperations') }}</h4>
               <ul>
-                <li><kbd>左键拖拽</kbd> 平移画布</li>
-                <li><kbd>右键点击</kbd> 打开快捷菜单</li>
-                <li><kbd>Ctrl+拖拽</kbd> 框选多个节点</li>
-                <li><kbd>空格+拖拽</kbd> 平移画布</li>
-                <li><kbd>左键单击</kbd> 选中节点</li>
-                <li><kbd>双击空白处</kbd> 添加新节点</li>
-                <li><kbd>滚轮↑</kbd> 以光标为中心放大</li>
-                <li><kbd>滚轮↓</kbd> 以光标为中心缩小</li>
+                <li><kbd>{{ t('canvas.leftDrag') }}</kbd> {{ t('canvas.leftDragDesc') }}</li>
+                <li><kbd>{{ t('canvas.rightClick') }}</kbd> {{ t('canvas.rightClickDesc') }}</li>
+                <li><kbd>{{ t('canvas.ctrlDrag') }}</kbd> {{ t('canvas.ctrlDragDesc') }}</li>
+                <li><kbd>{{ t('canvas.spaceDrag') }}</kbd> {{ t('canvas.spaceDragDesc') }}</li>
+                <li><kbd>{{ t('canvas.leftClick') }}</kbd> {{ t('canvas.leftClickDesc') }}</li>
+                <li><kbd>{{ t('canvas.doubleClickBlank') }}</kbd> {{ t('canvas.doubleClickBlankDesc') }}</li>
+                <li><kbd>{{ t('canvas.scrollUp') }}</kbd> {{ t('canvas.scrollUpDesc') }}</li>
+                <li><kbd>{{ t('canvas.scrollDown') }}</kbd> {{ t('canvas.scrollDownDesc') }}</li>
               </ul>
             </div>
             <div class="help-section">
-              <h4>⌨️ 快捷键</h4>
+              <h4>⌨️ {{ t('canvas.keyboardShortcuts') }}</h4>
               <ul>
-                <li><kbd>Ctrl+Z</kbd> 撤销</li>
-                <li><kbd>Ctrl+Y</kbd> 重做</li>
-                <li><kbd>Ctrl+C</kbd> 复制节点</li>
-                <li><kbd>Ctrl+V</kbd> 粘贴节点</li>
-                <li><kbd>Ctrl+A</kbd> 全选节点</li>
-                <li><kbd>Ctrl+G</kbd> 编组选中的节点</li>
-                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> 删除选中的节点</li>
-                <li><kbd>Escape</kbd> 关闭弹窗/取消选择</li>
-                <li><kbd>Ctrl+Enter</kbd> 开始生成</li>
+                <li><kbd>Ctrl+Z</kbd> {{ t('canvas.undoShortcut') }}</li>
+                <li><kbd>Ctrl+Y</kbd> {{ t('canvas.redoShortcut') }}</li>
+                <li><kbd>Ctrl+C</kbd> {{ t('canvas.copyNode') }}</li>
+                <li><kbd>Ctrl+V</kbd> {{ t('canvas.pasteNode') }}</li>
+                <li><kbd>Ctrl+A</kbd> {{ t('canvas.selectAllNodes') }}</li>
+                <li><kbd>Ctrl+G</kbd> {{ t('canvas.groupNodes') }}</li>
+                <li><kbd>Delete</kbd> / <kbd>Backspace</kbd> {{ t('canvas.deleteSelected') }}</li>
+                <li><kbd>Escape</kbd> {{ t('canvas.closeDialog') }}</li>
+                <li><kbd>Ctrl+Enter</kbd> {{ t('canvas.startGenerate') }}</li>
               </ul>
             </div>
             <div class="help-section">
-              <h4>📌 节点操作</h4>
+              <h4>📌 {{ t('canvas.nodeOperations') }}</h4>
               <ul>
-                <li>拖拽节点边缘的<strong>连接点</strong>来创建连线</li>
-                <li>右键点击节点打开<strong>操作菜单</strong></li>
-                <li>点击节点上的 <strong>+</strong> 快速添加下游节点</li>
+                <li>{{ t('canvas.dragConnection') }}</li>
+                <li>{{ t('canvas.rightClickNode') }}</li>
+                <li>{{ t('canvas.clickPlus') }}</li>
               </ul>
             </div>
           </div>
@@ -616,6 +1132,28 @@ onUnmounted(() => {
         @saved="handleWorkflowSaved"
       />
       
+      <!-- 工作流面板 -->
+      <WorkflowPanel
+        :visible="showWorkflowPanel"
+        @close="closeWorkflowPanel"
+        @load="handleWorkflowLoaded"
+        @new="handleWorkflowNew"
+      />
+      
+      <!-- 资产面板 -->
+      <AssetPanel
+        :visible="showAssetPanel"
+        @close="closeAssetPanel"
+        @insert-asset="handleAssetInsert"
+      />
+      
+      <!-- 历史记录面板 -->
+      <HistoryPanel
+        :visible="showHistoryPanel"
+        @close="closeHistoryPanel"
+        @apply-history="handleHistoryApply"
+      />
+      
       <!-- 编组工具栏 -->
       <GroupToolbar
         v-if="showGroupToolbar"
@@ -632,6 +1170,21 @@ onUnmounted(() => {
         @execute="handleExecuteGroup"
         @save-workflow="handleSaveWorkflow"
       />
+      
+      <!-- 图像节点工具栏已移至 ImageNode.vue 内部，使用 props.selected 控制显示 -->
+      
+      <!-- 图片编辑模式（全屏覆盖层） - 用于裁剪、标注等 -->
+      <ImageEditMode />
+      
+      <!-- 原地图片编辑器 - 用于重绘、擦除 -->
+      <InplaceImageEditor />
+      
+      <!-- 新手引导 -->
+      <OnboardingGuide
+        :visible="showOnboarding"
+        @close="closeOnboarding"
+        @complete="handleOnboardingComplete"
+      />
     </div>
   </div>
 </template>
@@ -646,6 +1199,14 @@ onUnmounted(() => {
 
 .canvas-page.is-transitioning {
   pointer-events: none;
+}
+
+/* 标签容器 - 左上角，在模式切换按钮右侧 */
+.tabs-container {
+  position: fixed;
+  top: 16px;
+  left: 70px;
+  z-index: 100;
 }
 
 /* 模式切换按钮 */
@@ -1005,6 +1566,39 @@ onUnmounted(() => {
 
 .help-section strong {
   color: #ffffff;
+}
+
+/* 右上角控制区域 */
+.canvas-top-right-controls {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.canvas-top-right-controls .canvas-help-btn {
+  position: static;
+  bottom: auto;
+  right: auto;
+}
+
+/* 确保语言切换器在画布模式下样式正确 */
+.canvas-top-right-controls :deep(.language-switcher) {
+  z-index: 9001;
+}
+
+.canvas-top-right-controls :deep(.lang-trigger) {
+  background: rgba(30, 30, 30, 0.9);
+  border-color: rgba(255, 255, 255, 0.15);
+  padding: 8px 12px;
+}
+
+.canvas-top-right-controls :deep(.lang-trigger:hover) {
+  background: rgba(50, 50, 50, 0.95);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 </style>
 

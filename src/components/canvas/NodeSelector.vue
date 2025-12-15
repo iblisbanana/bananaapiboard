@@ -5,6 +5,9 @@
 import { ref, computed } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
 import { NODE_TYPES, NODE_TYPE_CONFIG, NODE_CATEGORIES, getDownstreamOptions, getUpstreamOptions } from '@/config/canvas/nodeTypes'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   position: {
@@ -376,7 +379,7 @@ function formatFileSize(bytes) {
   >
     <!-- 标题 -->
     <div class="node-selector-title">
-      {{ triggerNode ? (isLeftTrigger ? '添加上游输入' : '引用该节点生成') : '添加节点' }}
+      {{ triggerNode ? (isLeftTrigger ? t('canvas.addUpstream') : t('canvas.referenceGenerate')) : t('canvas.addNode') }}
     </div>
     
     <!-- 节点列表 -->
@@ -390,26 +393,26 @@ function formatFileSize(bytes) {
       >
         <div class="node-selector-icon">{{ node.icon }}</div>
         <div class="node-selector-info">
-          <div class="node-selector-name">{{ node.label }}</div>
-          <div class="node-selector-desc" v-if="node.description">{{ node.description }}</div>
+          <div class="node-selector-name">{{ t(node.label) }}</div>
+          <div class="node-selector-desc" v-if="node.description">{{ t(node.description) }}</div>
         </div>
       </div>
     </template>
     
     <!-- 无可用节点提示 -->
     <div v-else class="node-selector-empty">
-      <div class="empty-icon">🔗</div>
-      <div class="empty-text">暂无可连接的节点类型</div>
+      <div class="empty-icon">○</div>
+      <div class="empty-text">{{ t('canvas.noNodeTypes') }}</div>
     </div>
     
     <!-- 分隔线和上传选项（仅非节点触发时显示） -->
     <template v-if="!triggerNode">
       <div class="node-selector-divider"></div>
-      <div class="node-selector-title">添加资源</div>
+      <div class="node-selector-title">{{ t('canvas.addResource') }}</div>
       <div class="node-selector-item" @click="handleUploadClick">
-        <div class="node-selector-icon">⬆</div>
+        <div class="node-selector-icon">↑</div>
         <div class="node-selector-info">
-          <div class="node-selector-name">上传</div>
+          <div class="node-selector-name">{{ t('common.upload') }}</div>
         </div>
       </div>
     </template>

@@ -5,6 +5,9 @@
 import { ref, computed, watch } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
 import { saveWorkflow, getStorageQuota } from '@/api/canvas/workflow'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   visible: Boolean
@@ -32,8 +35,8 @@ const isUpdate = computed(() => !!currentWorkflowId.value)
 
 // 按钮文字
 const saveButtonText = computed(() => {
-  if (isSaving.value) return '保存中...'
-  return isUpdate.value ? '更新工作流' : '保存工作流'
+  if (isSaving.value) return t('canvas.saving')
+  return isUpdate.value ? t('canvas.updateWorkflow') : t('canvas.saveWorkflow')
 })
 
 // 监听对话框打开
@@ -83,12 +86,12 @@ function formatSize(bytes) {
 async function handleSave() {
   // 验证
   if (!workflowName.value.trim()) {
-    saveError.value = '请输入工作流名称'
+    saveError.value = t('canvas.workflowNamePlaceholder')
     return
   }
   
   if (canvasStore.nodes.length === 0) {
-    saveError.value = '画布为空，无法保存'
+    saveError.value = t('canvas.emptyCanvas')
     return
   }
   
@@ -145,7 +148,7 @@ function handleClose() {
       <!-- 标题 -->
       <div class="dialog-header">
         <h2 class="dialog-title">
-          {{ isUpdate ? '更新工作流' : '保存工作流' }}
+          {{ isUpdate ? t('canvas.updateWorkflow') : t('canvas.saveWorkflow') }}
         </h2>
         <button class="dialog-close" @click="handleClose">✕</button>
       </div>
@@ -156,14 +159,14 @@ function handleClose() {
         <div v-if="quota" class="quota-info">
           <div class="quota-stats">
             <div class="quota-item">
-              <span class="quota-label">存储空间</span>
+              <span class="quota-label">{{ t('canvas.storageSpace') }}</span>
               <span class="quota-value">
                 {{ formatSize(quota.used_storage) }} / {{ formatSize(quota.total_quota) }}
                 <span class="quota-percentage">({{ quota.used_percentage }}%)</span>
               </span>
             </div>
             <div class="quota-item">
-              <span class="quota-label">工作流数量</span>
+              <span class="quota-label">{{ t('canvas.workflowCount') }}</span>
               <span class="quota-value">
                 {{ quota.current_workflows }} / {{ quota.max_workflows }}
               </span>
@@ -173,30 +176,30 @@ function handleClose() {
           <!-- VIP提示 -->
           <div v-if="!quota.is_vip" class="vip-tip">
             <span class="vip-icon">💎</span>
-            升级VIP可享受30个工作流、10GB存储空间
+            {{ t('canvas.vipTip') }}
           </div>
         </div>
         
         <!-- 表单 -->
         <form @submit.prevent="handleSave">
           <div class="form-group">
-            <label class="form-label">工作流名称 *</label>
+            <label class="form-label">{{ t('canvas.workflowNameRequired') }}</label>
             <input
               v-model="workflowName"
               type="text"
               class="form-input"
-              placeholder="输入工作流名称"
+              :placeholder="t('canvas.workflowNamePlaceholder')"
               maxlength="100"
               :disabled="isSaving"
             />
           </div>
           
           <div class="form-group">
-            <label class="form-label">描述（可选）</label>
+            <label class="form-label">{{ t('canvas.workflowDescOptional') }}</label>
             <textarea
               v-model="workflowDescription"
               class="form-textarea"
-              placeholder="简单描述这个工作流的用途"
+              :placeholder="t('canvas.workflowDescPlaceholder')"
               rows="3"
               maxlength="500"
               :disabled="isSaving"
@@ -211,11 +214,11 @@ function handleClose() {
           <!-- 工作流信息 -->
           <div class="workflow-info">
             <div class="info-item">
-              <span class="info-label">节点数量</span>
+              <span class="info-label">{{ t('canvas.nodeCount') }}</span>
               <span class="info-value">{{ canvasStore.nodes.length }}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">连线数量</span>
+              <span class="info-label">{{ t('canvas.edgeCount') }}</span>
               <span class="info-value">{{ canvasStore.edges.length }}</span>
             </div>
           </div>
@@ -230,7 +233,7 @@ function handleClose() {
           @click="handleClose"
           :disabled="isSaving"
         >
-          取消
+          {{ t('common.cancel') }}
         </button>
         <button
           type="button"

@@ -8,6 +8,9 @@ import { useRouter } from 'vue-router'
 import { redeemVoucher as redeemVoucherApi } from '@/api/client'
 import { getTenantHeaders } from '@/config/tenant'
 import { formatPoints, formatBalance } from '@/utils/format'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps({
   visible: {
@@ -39,6 +42,10 @@ const invite = ref({ invite_code: '', uses: [] })
 const checkinStatus = ref({ hasCheckedInToday: false, consecutiveDays: 0 })
 const loading = ref(false)
 
+// 套餐悬浮提示状态
+const hoveredPackage = ref(null)
+const packageTooltipPosition = ref({ x: 0, y: 0 })
+
 // 表单
 const profileForm = ref({ username: '', email: '', bio: '' })
 const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
@@ -69,27 +76,43 @@ const transferAmount = ref('')
 const transferLoading = ref(false)
 const exchangeRate = ref(10) // 1元 = 10积分
 
+// 新手引导设置
+const onboardingEnabled = ref(localStorage.getItem('canvasOnboardingEnabled') === 'true')
+
+// 切换新手引导
+function toggleOnboarding(event) {
+  const enabled = event.target.checked
+  onboardingEnabled.value = enabled
+  localStorage.setItem('canvasOnboardingEnabled', enabled ? 'true' : 'false')
+  
+  // 如果打开了引导，同时重置完成状态，这样下次进入画布会显示
+  if (enabled) {
+    localStorage.removeItem('canvasOnboardingCompleted')
+  }
+}
+
 // 自定义对话框
 const dialog = ref({
   visible: false,
   type: 'alert', // 'alert' | 'confirm'
   title: '',
   message: '',
-  confirmText: '确定',
-  cancelText: '取消',
+  confirmText: '',
+  cancelText: '',
   onConfirm: null,
   onCancel: null
 })
 
 // 显示提示对话框
-function showAlert(message, title = '提示') {
+function showAlert(message, title) {
+  const displayTitle = title || t('common.tip')
   return new Promise((resolve) => {
     dialog.value = {
       visible: true,
       type: 'alert',
-      title,
+      title: displayTitle,
       message,
-      confirmText: '确定',
+      confirmText: t('common.confirm'),
       onConfirm: () => {
         dialog.value.visible = false
         resolve(true)
@@ -99,15 +122,16 @@ function showAlert(message, title = '提示') {
 }
 
 // 显示确认对话框
-function showConfirm(message, title = '确认') {
+function showConfirm(message, title) {
+  const displayTitle = title || t('common.confirm')
   return new Promise((resolve) => {
     dialog.value = {
       visible: true,
       type: 'confirm',
-      title,
+      title: displayTitle,
       message,
-      confirmText: '确定',
-      cancelText: '取消',
+      confirmText: t('common.confirm'),
+      cancelText: t('common.cancel'),
       onConfirm: () => {
         dialog.value.visible = false
         resolve(true)
@@ -121,15 +145,15 @@ function showConfirm(message, title = '确认') {
 }
 
 // 菜单列表（使用简洁的符号图标）
-const menuItems = [
-  { id: 'home', icon: 'home', label: '个人主页' },
-  { id: 'profile', icon: 'settings', label: '账户管理' },
-  { id: 'packages', icon: 'package', label: '订阅套餐' },
-  { id: 'points', icon: 'diamond', label: '积分管理' },
-  { id: 'voucher', icon: 'ticket', label: '兑换中心' },
-  { id: 'invite', icon: 'gift', label: '邀请奖励' },
-  { id: 'help', icon: 'help', label: '使用教程' }
-]
+const menuItems = computed(() => [
+  { id: 'home', icon: 'home', label: t('user.home') },
+  { id: 'profile', icon: 'settings', label: t('user.accountSettings') },
+  { id: 'packages', icon: 'package', label: t('user.packages') },
+  { id: 'points', icon: 'diamond', label: t('user.pointsManage') },
+  { id: 'voucher', icon: 'ticket', label: t('user.redeemCenter') },
+  { id: 'invite', icon: 'gift', label: t('user.invite') },
+  { id: 'help', icon: 'help', label: t('user.tutorial') }
+])
 
 // SVG 图标组件
 const icons = {
@@ -215,17 +239,17 @@ async function performCheckin() {
       checkinStatus.value.hasCheckedInToday = true
       checkinStatus.value.consecutiveDays++
       emit('update')
-      showAlert(`签到成功！获得 ${data.reward} 积分`, '🎉 签到成功')
+      showAlert(t('user.checkinSuccessMsg', { points: data.reward }), `🎉 ${t('user.checkinSuccess')}`)
     }
   } catch (e) {
-    showAlert('签到失败，请稍后重试', '提示')
+    showAlert(t('user.checkinFailed'))
   }
 }
 
 // 兑换券
 async function redeemVoucher() {
   if (!voucherCode.value.trim()) {
-    voucherError.value = '请输入兑换码'
+    voucherError.value = t('voucher.enterCode')
     return
   }
   
@@ -235,12 +259,12 @@ async function redeemVoucher() {
   
   try {
     const result = await redeemVoucherApi(voucherCode.value.trim())
-    voucherSuccess.value = result.message || '兑换成功'
+    voucherSuccess.value = result.message || t('voucher.redeemSuccess')
     voucherCode.value = ''
     emit('update')
     setTimeout(() => { voucherSuccess.value = '' }, 3000)
   } catch (e) {
-    voucherError.value = e.message || '兑换失败'
+    voucherError.value = e.message || t('voucher.redeemFailed')
   } finally {
     voucherLoading.value = false
   }
@@ -262,12 +286,12 @@ async function saveProfile() {
     })
     if (res.ok) {
       emit('update')
-      showAlert('资料保存成功', '✓ 成功')
+      showAlert(t('user.profileSaved'), `✓ ${t('common.success')}`)
     } else {
-      showAlert('保存失败，请稍后重试', '提示')
+      showAlert(t('user.saveFailed'))
     }
   } catch (e) {
-    showAlert('保存失败，请稍后重试', '提示')
+    showAlert(t('user.saveFailed'))
   } finally {
     saveLoading.value = false
   }
@@ -276,11 +300,11 @@ async function saveProfile() {
 // 修改密码
 async function changePassword() {
   if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
-    showAlert('两次输入的密码不一致', '提示')
+    showAlert(t('user.passwordMismatch'))
     return
   }
   if (passwordForm.value.newPassword.length < 6) {
-    showAlert('新密码长度至少6位', '提示')
+    showAlert(t('user.passwordMinLength'))
     return
   }
   
@@ -300,28 +324,53 @@ async function changePassword() {
       })
     })
     if (res.ok) {
-      showAlert('密码修改成功', '✓ 成功')
+      showAlert(t('user.passwordChanged'), `✓ ${t('common.success')}`)
       passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
     } else {
       const data = await res.json()
-      showAlert(data.error || '密码修改失败', '提示')
+      showAlert(data.error || t('user.passwordChangeFailed'))
     }
   } catch (e) {
-    showAlert('密码修改失败，请稍后重试', '提示')
+    showAlert(t('user.passwordChangeFailed'))
   } finally {
     saveLoading.value = false
   }
+}
+
+// 套餐悬浮处理
+function handlePackageMouseEnter(pkg, event) {
+  hoveredPackage.value = pkg
+  // 计算提示框位置（相对于套餐卡片）
+  const rect = event.currentTarget.getBoundingClientRect()
+  packageTooltipPosition.value = {
+    x: rect.right + 10,
+    y: rect.top
+  }
+}
+
+function handlePackageMouseLeave() {
+  hoveredPackage.value = null
 }
 
 // 购买套餐
 async function purchasePackage(pkg) {
   // 检查余额是否足够
   if ((props.userInfo?.balance || 0) < pkg.price) {
-    showAlert(`余额不足，当前余额 ¥${((props.userInfo?.balance || 0) / 100).toFixed(2)}，需要 ¥${(pkg.price / 100).toFixed(2)}`, '提示')
+    showAlert(t('packages.insufficientBalance', { 
+      current: ((props.userInfo?.balance || 0) / 100).toFixed(2), 
+      required: (pkg.price / 100).toFixed(2) 
+    }))
     return
   }
   
-  const confirmed = await showConfirm(`确认使用余额购买「${pkg.name}」套餐？\n价格：¥${(pkg.price / 100).toFixed(2)}\n将获得 ${pkg.points} 积分`, '购买确认')
+  const confirmed = await showConfirm(
+    t('packages.purchaseConfirmMsg', { 
+      name: pkg.name, 
+      price: (pkg.price / 100).toFixed(2), 
+      points: pkg.points 
+    }), 
+    t('packages.purchaseConfirm')
+  )
   if (!confirmed) return
   
   try {
@@ -339,16 +388,16 @@ async function purchasePackage(pkg) {
     
     if (res.ok && !data.pay_url) {
       // 余额支付成功
-      showAlert(data.message || `套餐购买成功！获得 ${pkg.points} 积分`, '🎉 购买成功')
+      showAlert(data.message || t('packages.purchaseSuccessMsg', { points: pkg.points }), `🎉 ${t('packages.purchaseSuccess')}`)
       emit('update')
     } else if (data.pay_url) {
       // 需要跳转支付
       window.open(data.pay_url, '_blank')
     } else {
-      showAlert(data.message || data.error || '购买失败', '提示')
+      showAlert(data.message || data.error || t('packages.purchaseFailed'))
     }
   } catch (e) {
-    showAlert('购买失败，请稍后重试', '提示')
+    showAlert(t('packages.purchaseFailed'))
   }
 }
 
@@ -397,13 +446,13 @@ function getFinalRechargeAmount() {
 // 应用优惠券
 async function applyRechargeCoupon() {
   if (!rechargeCouponCode.value || !rechargeCouponCode.value.trim()) {
-    rechargeCouponError.value = '请输入优惠券码'
+    rechargeCouponError.value = t('user.enterCouponCode')
     return
   }
   
   const amount = getFinalRechargeAmount()
   if (amount < 100) {
-    rechargeCouponError.value = '请先选择充值金额'
+    rechargeCouponError.value = t('user.selectAmountFirst')
     return
   }
   
@@ -427,18 +476,18 @@ async function applyRechargeCoupon() {
     const data = await res.json()
     
     if (!res.ok) {
-      rechargeCouponError.value = data.message || '优惠券验证失败'
+      rechargeCouponError.value = data.message || t('user.couponValidateFailed')
       return
     }
     
     appliedRechargeCoupon.value = data.coupon
     rechargeCouponDiscount.value = data.discount_amount
     rechargeCouponError.value = ''
-    showAlert('优惠券应用成功', '✓ 成功')
+    showAlert(t('user.couponApplied'), `✓ ${t('common.success')}`)
     
   } catch (e) {
     console.error('[applyRechargeCoupon] error:', e)
-    rechargeCouponError.value = '优惠券验证失败，请重试'
+    rechargeCouponError.value = t('user.couponValidateFailed')
   }
 }
 
@@ -455,18 +504,18 @@ async function submitRecharge() {
   const amount = getFinalRechargeAmount()
   
   if (amount < 100) {
-    rechargeError.value = '最低充值金额为1元'
-    showAlert(rechargeError.value, '提示')
+    rechargeError.value = t('user.minRechargeAmount')
+    showAlert(rechargeError.value)
     return
   }
   if (amount > 150000) {
-    rechargeError.value = '单笔最高充值1500元'
-    showAlert(rechargeError.value, '提示')
+    rechargeError.value = t('user.maxRechargeAmount')
+    showAlert(rechargeError.value)
     return
   }
   if (!rechargeSelectedMethod.value) {
-    rechargeError.value = '请选择支付方式'
-    showAlert(rechargeError.value, '提示')
+    rechargeError.value = t('user.selectPaymentMethod')
+    showAlert(rechargeError.value)
     return
   }
   
@@ -499,7 +548,7 @@ async function submitRecharge() {
     const data = await res.json()
     
     if (!res.ok) {
-      throw new Error(data.message || '创建订单失败')
+      throw new Error(data.message || t('user.createOrderFailed'))
     }
     
     // 跳转到支付页面前，设置待刷新标记
@@ -508,12 +557,12 @@ async function submitRecharge() {
       localStorage.setItem('payment_timestamp', Date.now().toString())
       window.location.href = data.pay_url
     } else {
-      showAlert('充值订单已创建', '✓ 成功')
+      showAlert(t('user.rechargeOrderCreated'), `✓ ${t('common.success')}`)
       showRechargePanel.value = false
     }
   } catch (e) {
-    rechargeError.value = e.message || '充值失败，请重试'
-    showAlert(rechargeError.value, '提示')
+    rechargeError.value = e.message || t('user.rechargeFailed')
+    showAlert(rechargeError.value)
   } finally {
     rechargeLoading.value = false
   }
@@ -523,12 +572,12 @@ async function submitRecharge() {
 async function submitTransfer() {
   const yuan = parseFloat(transferAmount.value)
   if (!yuan || yuan <= 0) {
-    showAlert('请输入划转金额', '提示')
+    showAlert(t('user.enterTransferAmount'))
     return
   }
   
   if (yuan < 1) {
-    showAlert('最低划转金额为1元', '提示')
+    showAlert(t('user.minTransferAmount'))
     return
   }
   
@@ -537,11 +586,14 @@ async function submitTransfer() {
   
   // 检查余额是否足够
   if (props.userInfo?.balance < amountInCents) {
-    showAlert(`余额不足，当前余额 ¥${((props.userInfo?.balance || 0) / 100).toFixed(2)}`, '提示')
+    showAlert(t('user.insufficientBalanceTransfer', { balance: ((props.userInfo?.balance || 0) / 100).toFixed(2) }))
     return
   }
   
-  const confirmed = await showConfirm(`确认将 ¥${yuan.toFixed(2)} 余额划转为 ${points} 永久积分？`, '划转确认')
+  const confirmed = await showConfirm(
+    t('user.transferConfirmMsg', { amount: yuan.toFixed(2), points: points }), 
+    t('user.transferConfirm')
+  )
   if (!confirmed) return
   
   transferLoading.value = true
@@ -558,14 +610,14 @@ async function submitTransfer() {
     })
     const data = await res.json()
     if (res.ok) {
-      showAlert(data.message || `划转成功！获得 ${data.points || points} 永久积分`, '🎉 划转成功')
+      showAlert(data.message || t('user.transferSuccessMsg', { points: data.points || points }), `🎉 ${t('user.transferSuccess')}`)
       transferAmount.value = ''
       emit('update')
     } else {
-      showAlert(data.message || data.error || '划转失败', '提示')
+      showAlert(data.message || data.error || t('user.transferFailed'))
     }
   } catch (e) {
-    showAlert('划转失败，请稍后重试', '提示')
+    showAlert(t('user.transferFailed'))
   } finally {
     transferLoading.value = false
   }
@@ -575,7 +627,7 @@ async function submitTransfer() {
 function copyInviteCode() {
   if (invite.value.invite_code) {
     navigator.clipboard.writeText(invite.value.invite_code)
-    showAlert('邀请码已复制到剪贴板', '✓ 复制成功')
+    showAlert(t('user.inviteCodeCopied'), `✓ ${t('common.copySuccess')}`)
   }
 }
 
@@ -583,12 +635,12 @@ function copyInviteCode() {
 function copyInviteLink() {
   const link = `${window.location.origin}/?invite=${invite.value.invite_code}`
   navigator.clipboard.writeText(link)
-  showAlert('邀请链接已复制到剪贴板', '✓ 复制成功')
+  showAlert(t('user.inviteLinkCopied'), `✓ ${t('common.copySuccess')}`)
 }
 
 // 退出登录
 async function logout() {
-  const confirmed = await showConfirm('确认退出登录？', '退出确认')
+  const confirmed = await showConfirm(t('user.logoutConfirmMsg'), t('user.logoutConfirm'))
   if (confirmed) {
     localStorage.removeItem('token')
     localStorage.removeItem('userMode')
@@ -611,7 +663,7 @@ function formatTime(ts) {
 function formatExpireTime(ts) {
   if (!ts) return ''
   const days = Math.ceil((ts - Date.now()) / 86400000)
-  return days > 0 ? `${days}天后过期` : '已过期'
+  return days > 0 ? t('user.expiresInDays', { days }) : t('user.expired')
 }
 
 // 获取积分图标类型
@@ -629,30 +681,10 @@ function getLedgerIconType(type) {
 
 // 获取积分类型文字
 function getLedgerTypeText(type) {
-  const texts = { 
-    register: '注册奖励', 
-    checkin: '签到奖励', 
-    daily_checkin: '每日签到',
-    invite: '邀请奖励', 
-    inviter_reward: '邀请奖励',
-    invitee_reward: '被邀请奖励',
-    generate: '生成消耗', 
-    generate_cost: '生成消耗',
-    generate_cost_package: '套餐积分消耗',
-    generate_cost_permanent: '永久积分消耗',
-    video_generation: '视频生成',
-    image_generation: '图片生成',
-    recharge: '充值', 
-    balance_transfer: '余额划转',
-    balance_to_points: '余额划转积分',
-    package: '套餐购买',
-    package_purchase: '套餐购买',
-    voucher: '兑换码',
-    voucher_redeem: '兑换码兑换',
-    admin_adjust: '管理员调整',
-    refund: '退款'
-  }
-  return texts[type] || type
+  const key = `user.ledgerType.${type}`
+  const translated = t(key)
+  // 如果翻译返回的还是 key 本身，说明没找到翻译，返回原始类型
+  return translated === key ? type : translated
 }
 </script>
 
@@ -670,8 +702,8 @@ function getLedgerTypeText(type) {
               {{ userInfo?.username?.charAt(0)?.toUpperCase() || 'U' }}
             </div>
             <div class="user-info">
-              <h3 class="user-name">{{ userInfo?.username || '用户' }}</h3>
-              <p class="user-email">{{ userInfo?.email || '未绑定邮箱' }}</p>
+              <h3 class="user-name">{{ userInfo?.username || t('common.user') }}</h3>
+              <p class="user-email">{{ userInfo?.email || t('user.noEmail') }}</p>
             </div>
             <button class="close-btn" @click="closePanel">×</button>
           </div>
@@ -681,17 +713,17 @@ function getLedgerTypeText(type) {
             <div class="stat-item">
               <span class="stat-icon" v-html="icons.diamond"></span>
               <span class="stat-value">{{ formatPoints(userInfo?.points || 0) }}</span>
-              <span class="stat-label">永久积分</span>
+              <span class="stat-label">{{ t('user.permanentPoints') }}</span>
             </div>
             <div class="stat-item">
               <span class="stat-icon" v-html="icons.star"></span>
               <span class="stat-value">{{ formatPoints(userInfo?.package_points || 0) }}</span>
-              <span class="stat-label">套餐积分</span>
+              <span class="stat-label">{{ t('user.packagePoints') }}</span>
             </div>
             <div class="stat-item">
               <span class="stat-icon" v-html="icons.coin"></span>
               <span class="stat-value">¥{{ formatBalance(userInfo?.balance || 0) }}</span>
-              <span class="stat-label">余额</span>
+              <span class="stat-label">{{ t('user.balance') }}</span>
             </div>
           </div>
 
@@ -715,7 +747,7 @@ function getLedgerTypeText(type) {
               <!-- 签到卡片 -->
               <div class="checkin-card">
                 <div class="checkin-info">
-                  <span class="checkin-days">连续签到 {{ checkinStatus.consecutiveDays }} 天</span>
+                  <span class="checkin-days">{{ t('user.consecutiveCheckin', { days: checkinStatus.consecutiveDays }) }}</span>
                 </div>
                 <button 
                   class="checkin-btn"
@@ -723,7 +755,7 @@ function getLedgerTypeText(type) {
                   :disabled="checkinStatus.hasCheckedInToday"
                   @click="performCheckin"
                 >
-                  {{ checkinStatus.hasCheckedInToday ? '✓ 已签到' : '签到领积分' }}
+                  {{ checkinStatus.hasCheckedInToday ? `✓ ${t('user.checkedIn')}` : t('user.checkinForPoints') }}
                 </button>
               </div>
 
@@ -731,19 +763,19 @@ function getLedgerTypeText(type) {
               <div class="quick-actions">
                 <button class="action-btn primary" @click="activeMenu = 'packages'">
                   <span class="action-icon" v-html="icons.package"></span>
-                  <span>购买套餐</span>
+                  <span>{{ t('user.buyPackage') }}</span>
                 </button>
                 <button class="action-btn" @click="activeMenu = 'voucher'">
                   <span class="action-icon" v-html="icons.ticket"></span>
-                  <span>兑换</span>
+                  <span>{{ t('user.redeem') }}</span>
                 </button>
                 <button class="action-btn" @click="openRechargePanel">
                   <span class="action-icon" v-html="icons.credit"></span>
-                  <span>充值</span>
+                  <span>{{ t('user.recharge') }}</span>
                 </button>
                 <button class="action-btn" @click="activeMenu = 'invite'">
                   <span class="action-icon" v-html="icons.gift"></span>
-                  <span>邀请</span>
+                  <span>{{ t('user.inviteShort') }}</span>
                 </button>
               </div>
 
@@ -751,7 +783,7 @@ function getLedgerTypeText(type) {
               <div v-if="userInfo?.package_points > 0" class="package-status">
                 <div class="package-badge">VIP</div>
                 <div class="package-info">
-                  <span>套餐积分 {{ formatPoints(userInfo.package_points) }}</span>
+                  <span>{{ t('user.packagePoints') }} {{ formatPoints(userInfo.package_points) }}</span>
                   <span class="expire-hint">{{ formatExpireTime(userInfo.package_points_expires_at) }}</span>
                 </div>
               </div>
@@ -759,87 +791,130 @@ function getLedgerTypeText(type) {
 
             <!-- 账户管理 -->
             <div v-else-if="activeMenu === 'profile'" class="content-section">
-              <h4 class="section-title">基本资料</h4>
+              <h4 class="section-title">{{ t('user.basicInfo') }}</h4>
               <div class="form-group">
-                <label>用户名</label>
-                <input v-model="profileForm.username" type="text" placeholder="输入用户名" maxlength="30" />
+                <label>{{ t('user.username') }}</label>
+                <input v-model="profileForm.username" type="text" :placeholder="t('user.enterUsername')" maxlength="30" />
               </div>
               <div class="form-group">
-                <label>邮箱</label>
-                <input v-model="profileForm.email" type="email" placeholder="输入邮箱" />
+                <label>{{ t('user.email') }}</label>
+                <input v-model="profileForm.email" type="email" :placeholder="t('user.enterEmail')" />
               </div>
               <div class="form-group">
-                <label>简介</label>
-                <textarea v-model="profileForm.bio" placeholder="一句话介绍自己" maxlength="200" rows="2"></textarea>
+                <label>{{ t('user.bio') }}</label>
+                <textarea v-model="profileForm.bio" :placeholder="t('user.enterBio')" maxlength="200" rows="2"></textarea>
               </div>
               <button class="btn-primary" @click="saveProfile" :disabled="saveLoading">
-                {{ saveLoading ? '保存中...' : '保存资料' }}
+                {{ saveLoading ? t('common.saving') : t('user.saveProfile') }}
               </button>
 
-              <h4 class="section-title" style="margin-top: 24px;">修改密码</h4>
+              <h4 class="section-title" style="margin-top: 24px;">{{ t('user.changePassword') }}</h4>
               <div class="form-group">
-                <label>原密码</label>
-                <input v-model="passwordForm.oldPassword" type="password" placeholder="输入原密码" />
+                <label>{{ t('user.oldPassword') }}</label>
+                <input v-model="passwordForm.oldPassword" type="password" :placeholder="t('user.enterOldPassword')" />
               </div>
               <div class="form-group">
-                <label>新密码</label>
-                <input v-model="passwordForm.newPassword" type="password" placeholder="输入新密码" />
+                <label>{{ t('user.newPassword') }}</label>
+                <input v-model="passwordForm.newPassword" type="password" :placeholder="t('user.enterNewPassword')" />
               </div>
               <div class="form-group">
-                <label>确认密码</label>
-                <input v-model="passwordForm.confirmPassword" type="password" placeholder="确认新密码" />
+                <label>{{ t('user.confirmPassword') }}</label>
+                <input v-model="passwordForm.confirmPassword" type="password" :placeholder="t('user.enterConfirmPassword')" />
               </div>
               <button class="btn-primary" @click="changePassword" :disabled="saveLoading">
-                修改密码
+                {{ t('user.changePassword') }}
               </button>
             </div>
 
             <!-- 订阅套餐 -->
             <div v-else-if="activeMenu === 'packages'" class="content-section">
-              <div v-if="packages.length === 0" class="empty-hint">暂无可用套餐</div>
+              <div v-if="packages.length === 0" class="empty-hint">{{ t('packages.noPackages') }}</div>
               <div v-else class="packages-list">
                 <div 
                   v-for="pkg in packages" 
                   :key="pkg.id"
-                  :class="['package-card', { popular: pkg.popular }]"
+                  :class="['package-card', { popular: pkg.popular, hovered: hoveredPackage?.id === pkg.id }]"
+                  @mouseenter="handlePackageMouseEnter(pkg, $event)"
+                  @mouseleave="handlePackageMouseLeave"
                 >
                   <div class="package-header">
                     <span class="package-name">{{ pkg.name }}</span>
-                    <span v-if="pkg.popular" class="popular-badge">推荐</span>
+                    <span v-if="pkg.popular" class="popular-badge">{{ t('packages.recommended') }}</span>
                   </div>
                   <div class="package-price">
                     <span class="price">¥{{ (pkg.price / 100).toFixed(0) }}</span>
-                    <span class="unit">/{{ pkg.duration_days }}天</span>
+                    <span class="unit">/{{ pkg.duration_days }}{{ t('time.days') }}</span>
                   </div>
-                  <div class="package-points">{{ pkg.points }} 积分</div>
+                  <div class="package-points">{{ pkg.points }} {{ t('user.points') }}</div>
                   <button class="btn-purchase" @click="purchasePackage(pkg)">
-                    购买
+                    {{ t('packages.buy') }}
                   </button>
                 </div>
               </div>
+              
+              <!-- 套餐详情悬浮提示 -->
+              <Teleport to="body">
+                <Transition name="tooltip-fade">
+                  <div 
+                    v-if="hoveredPackage" 
+                    class="package-tooltip"
+                    :style="{
+                      left: packageTooltipPosition.x + 'px',
+                      top: packageTooltipPosition.y + 'px'
+                    }"
+                  >
+                    <div class="tooltip-header">
+                      <span class="tooltip-name">{{ hoveredPackage.name }}</span>
+                      <span v-if="hoveredPackage.popular" class="tooltip-badge">{{ t('packages.recommended') }}</span>
+                    </div>
+                    <div class="tooltip-content">
+                      <p v-if="hoveredPackage.description" class="tooltip-desc">{{ hoveredPackage.description }}</p>
+                      <div class="tooltip-details">
+                        <div class="detail-item">
+                          <span class="detail-icon">💎</span>
+                          <span class="detail-text">{{ t('packages.includePoints', { points: hoveredPackage.points }) }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-icon">⏱️</span>
+                          <span class="detail-text">{{ t('packages.validFor', { days: hoveredPackage.duration_days }) }}</span>
+                        </div>
+                        <div class="detail-item">
+                          <span class="detail-icon">⚡</span>
+                          <span class="detail-text">{{ t('packages.concurrent', { limit: hoveredPackage.concurrent_limit || 1 }) }}</span>
+                        </div>
+                        <div class="detail-item price-highlight">
+                          <span class="detail-icon">💰</span>
+                          <span class="detail-text">{{ t('packages.price') }} <strong>¥{{ (hoveredPackage.price / 100).toFixed(2) }}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="tooltip-arrow"></div>
+                  </div>
+                </Transition>
+              </Teleport>
             </div>
 
             <!-- 积分管理 -->
             <div v-else-if="activeMenu === 'points'" class="content-section">
               <!-- 余额划转 -->
               <div class="transfer-section">
-                <h4 class="section-title">余额划转积分</h4>
-                <p class="transfer-hint">汇率：1元 = {{ exchangeRate }} 永久积分</p>
+                <h4 class="section-title">{{ t('user.balanceToPoints') }}</h4>
+                <p class="transfer-hint">{{ t('user.exchangeRateHint', { rate: exchangeRate }) }}</p>
                 <div class="transfer-form">
                   <input 
                     v-model="transferAmount" 
                     type="number" 
-                    placeholder="输入金额（元）" 
+                    :placeholder="t('user.enterTransferAmount')" 
                     min="1"
                   />
                   <button class="btn-primary" @click="submitTransfer" :disabled="transferLoading">
-                    {{ transferLoading ? '划转中...' : '确认划转' }}
+                    {{ transferLoading ? t('user.transferring') : t('user.confirmTransfer') }}
                   </button>
                 </div>
               </div>
 
-              <h4 class="section-title">积分记录</h4>
-              <div v-if="!Array.isArray(ledger) || ledger.length === 0" class="empty-hint">暂无记录</div>
+              <h4 class="section-title">{{ t('user.pointsRecord') }}</h4>
+              <div v-if="!Array.isArray(ledger) || ledger.length === 0" class="empty-hint">{{ t('user.noRecord') }}</div>
               <div v-else class="ledger-list">
                 <div v-for="item in (Array.isArray(ledger) ? ledger : []).slice(0, 20)" :key="item.id" class="ledger-item">
                   <span class="ledger-icon" v-html="icons[getLedgerIconType(item.type)]"></span>
@@ -856,27 +931,27 @@ function getLedgerTypeText(type) {
 
             <!-- 兑换中心 -->
             <div v-else-if="activeMenu === 'voucher'" class="content-section">
-              <h4 class="section-title">兑换码兑换</h4>
+              <h4 class="section-title">{{ t('user.voucherRedeem') }}</h4>
               <div class="voucher-form">
                 <input 
                   v-model="voucherCode" 
                   type="text" 
-                  placeholder="请输入兑换码"
+                  :placeholder="t('user.enterVoucherCode')"
                   @keyup.enter="redeemVoucher"
                 />
                 <button class="btn-primary" @click="redeemVoucher" :disabled="voucherLoading">
-                  {{ voucherLoading ? '兑换中...' : '立即兑换' }}
+                  {{ voucherLoading ? t('user.redeeming') : t('user.redeemNow') }}
                 </button>
               </div>
               <div v-if="voucherError" class="msg-error">{{ voucherError }}</div>
               <div v-if="voucherSuccess" class="msg-success">{{ voucherSuccess }}</div>
 
               <div class="voucher-tips">
-                <h5>兑换说明</h5>
+                <h5>{{ t('user.redeemTips') }}</h5>
                 <ul>
-                  <li>兑换码区分大小写，请准确输入</li>
-                  <li>每个兑换码只能使用一次</li>
-                  <li>兑换成功后积分立即到账</li>
+                  <li>{{ t('user.redeemTip1') }}</li>
+                  <li>{{ t('user.redeemTip2') }}</li>
+                  <li>{{ t('user.redeemTip3') }}</li>
                 </ul>
               </div>
             </div>
@@ -884,16 +959,16 @@ function getLedgerTypeText(type) {
             <!-- 邀请奖励 -->
             <div v-else-if="activeMenu === 'invite'" class="content-section">
               <div class="invite-card">
-                <h4>我的邀请码</h4>
-                <div class="invite-code">{{ invite.invite_code || '加载中...' }}</div>
+                <h4>{{ t('user.myInviteCode') }}</h4>
+                <div class="invite-code">{{ invite.invite_code || t('common.loading') }}</div>
                 <div class="invite-actions">
                   <button class="btn-copy" @click="copyInviteCode">
                     <span class="btn-icon" v-html="icons.copy"></span>
-                    <span>复制邀请码</span>
+                    <span>{{ t('user.copyInviteCode') }}</span>
                   </button>
                   <button class="btn-copy" @click="copyInviteLink">
                     <span class="btn-icon" v-html="icons.link"></span>
-                    <span>复制链接</span>
+                    <span>{{ t('user.copyInviteLink') }}</span>
                   </button>
                 </div>
               </div>
@@ -901,20 +976,20 @@ function getLedgerTypeText(type) {
               <div class="invite-stats">
                 <div class="stat">
                   <span class="stat-num">{{ invite.uses?.length || 0 }}</span>
-                  <span class="stat-label">已邀请</span>
+                  <span class="stat-label">{{ t('user.invited') }}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-num">{{ (invite.uses?.length || 0) * 10 }}</span>
-                  <span class="stat-label">获得积分</span>
+                  <span class="stat-label">{{ t('user.earnedPoints') }}</span>
                 </div>
               </div>
 
               <div class="invite-tips">
-                <h5>邀请规则</h5>
+                <h5>{{ t('user.inviteRules') }}</h5>
                 <ul>
-                  <li>每邀请一位好友注册，您获得 10 积分</li>
-                  <li>被邀请人也可获得 5 积分奖励</li>
-                  <li>邀请越多，奖励越多</li>
+                  <li>{{ t('user.inviteRule1') }}</li>
+                  <li>{{ t('user.inviteRule2') }}</li>
+                  <li>{{ t('user.inviteRule3') }}</li>
                 </ul>
               </div>
             </div>
@@ -924,23 +999,41 @@ function getLedgerTypeText(type) {
               <div class="help-list">
                 <div class="help-item" @click="goToHelp">
                   <span class="help-icon" v-html="icons.book"></span>
-                  <span class="help-text">快速入门指南</span>
+                  <span class="help-text">{{ t('user.quickStart') }}</span>
                   <span class="help-arrow">→</span>
                 </div>
                 <div class="help-item">
                   <span class="help-icon" v-html="icons.brush"></span>
-                  <span class="help-text">画布操作教程</span>
+                  <span class="help-text">{{ t('user.canvasTutorial') }}</span>
                   <span class="help-arrow">→</span>
                 </div>
                 <div class="help-item">
                   <span class="help-icon" v-html="icons.diamond"></span>
-                  <span class="help-text">AI生成技巧</span>
+                  <span class="help-text">{{ t('user.aiGenerateTips') }}</span>
                   <span class="help-arrow">→</span>
                 </div>
                 <div class="help-item">
                   <span class="help-icon" v-html="icons.message"></span>
-                  <span class="help-text">联系客服</span>
+                  <span class="help-text">{{ t('user.contactSupport') }}</span>
                   <span class="help-arrow">→</span>
+                </div>
+              </div>
+              
+              <!-- 新手引导设置 -->
+              <div class="settings-section">
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <span class="setting-label">{{ t('onboarding.settings.showOnboarding') }}</span>
+                    <span class="setting-desc">{{ t('onboarding.settings.showOnboardingDesc') }}</span>
+                  </div>
+                  <label class="toggle-switch">
+                    <input 
+                      type="checkbox" 
+                      :checked="onboardingEnabled"
+                      @change="toggleOnboarding"
+                    />
+                    <span class="toggle-slider"></span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -950,20 +1043,20 @@ function getLedgerTypeText(type) {
           <div class="panel-footer">
             <button class="logout-btn" @click="logout">
               <span class="logout-icon" v-html="icons.logout"></span>
-              <span>退出登录</span>
+              <span>{{ t('user.logout') }}</span>
             </button>
           </div>
 
           <!-- 充值面板 -->
           <div v-if="showRechargePanel" class="recharge-panel">
             <div class="recharge-header">
-              <h4>账户充值</h4>
+              <h4>{{ t('user.accountRecharge') }}</h4>
               <button class="close-btn" @click="showRechargePanel = false">×</button>
             </div>
             
             <!-- 快捷金额 -->
             <div class="form-section">
-              <label class="form-label">选择金额</label>
+              <label class="form-label">{{ t('user.selectAmount') }}</label>
               <div class="recharge-amounts">
                 <button 
                   v-for="amount in quickAmounts" 
@@ -978,7 +1071,7 @@ function getLedgerTypeText(type) {
             
             <!-- 自定义金额 -->
             <div class="form-section">
-              <label class="form-label">或输入自定义金额（元）</label>
+              <label class="form-label">{{ t('user.customAmountHint') }}</label>
               <input 
                 v-model="rechargeCustomAmount" 
                 type="number" 
@@ -993,7 +1086,7 @@ function getLedgerTypeText(type) {
             
             <!-- 支付方式选择 -->
             <div v-if="paymentMethods.length > 0" class="form-section">
-              <label class="form-label">支付方式</label>
+              <label class="form-label">{{ t('user.paymentMethod') }}</label>
               <select v-model="rechargeSelectedMethod" class="form-select">
                 <option v-for="method in paymentMethods" :key="method.id" :value="method.id">
                   {{ method.name }}
@@ -1003,13 +1096,13 @@ function getLedgerTypeText(type) {
             
             <!-- 优惠券输入 -->
             <div class="form-section">
-              <label class="form-label">优惠券码（可选）</label>
+              <label class="form-label">{{ t('user.couponCode') }}</label>
               <div class="coupon-input-group">
                 <input 
                   v-model="rechargeCouponCode" 
                   type="text" 
                   class="form-input"
-                  placeholder="请输入优惠券码"
+                  :placeholder="t('user.enterCouponCode')"
                   :disabled="!!appliedRechargeCoupon"
                   @input="rechargeCouponCode = rechargeCouponCode.toUpperCase()"
                 />
@@ -1019,34 +1112,34 @@ function getLedgerTypeText(type) {
                   @click="applyRechargeCoupon"
                   :disabled="!rechargeCouponCode.trim()"
                 >
-                  应用
+                  {{ t('user.applyCoupon') }}
                 </button>
                 <button 
                   v-else
                   class="btn-remove-coupon" 
                   @click="removeRechargeCoupon"
                 >
-                  移除
+                  {{ t('user.removeCoupon') }}
                 </button>
               </div>
               <div v-if="rechargeCouponError" class="msg-error">{{ rechargeCouponError }}</div>
               <div v-if="appliedRechargeCoupon" class="msg-success">
-                ✓ 优惠券已应用，可减免 ¥{{ (rechargeCouponDiscount / 100).toFixed(2) }}
+                ✓ {{ t('user.couponApplied') }} -¥{{ (rechargeCouponDiscount / 100).toFixed(2) }}
               </div>
             </div>
             
             <!-- 价格信息 -->
             <div v-if="getFinalRechargeAmount() > 0" class="price-info">
               <div class="price-row">
-                <span>充值金额</span>
+                <span>{{ t('user.rechargeAmount') }}</span>
                 <span>¥{{ (getFinalRechargeAmount() / 100).toFixed(2) }}</span>
               </div>
               <div v-if="appliedRechargeCoupon && rechargeCouponDiscount > 0" class="price-row discount">
-                <span>优惠券减免</span>
+                <span>{{ t('user.couponDiscount') }}</span>
                 <span>-¥{{ (rechargeCouponDiscount / 100).toFixed(2) }}</span>
               </div>
               <div class="price-row total">
-                <span>实付金额</span>
+                <span>{{ t('user.actualPayment') }}</span>
                 <span class="total-price">
                   ¥{{ ((getFinalRechargeAmount() - rechargeCouponDiscount) / 100).toFixed(2) }}
                 </span>
@@ -1062,13 +1155,13 @@ function getLedgerTypeText(type) {
               @click="submitRecharge" 
               :disabled="rechargeLoading || getFinalRechargeAmount() < 100"
             >
-              {{ rechargeLoading ? '处理中...' : '确认充值' }}
+              {{ rechargeLoading ? t('user.processing') : t('user.confirmRecharge') }}
             </button>
           </div>
 
           <!-- 自定义对话框 -->
           <Transition name="dialog">
-            <div v-if="dialog.visible" class="custom-dialog-overlay" @click.self="dialog.type === 'confirm' && dialog.onCancel?.()">
+            <div v-if="dialog.visible" class="custom-dialog-overlay" @click.stop @click.self="dialog.type === 'confirm' && dialog.onCancel?.()">
               <div class="custom-dialog">
                 <div class="dialog-header">
                   <h4 class="dialog-title">{{ dialog.title }}</h4>
@@ -1571,6 +1664,126 @@ function getLedgerTypeText(type) {
   border-color: #667eea;
 }
 
+/* 套餐悬浮状态 */
+.package-card.hovered {
+  border-color: rgba(102, 126, 234, 0.6);
+  background: rgba(102, 126, 234, 0.15);
+  transform: translateX(2px);
+}
+
+/* 套餐详情悬浮提示框 */
+.package-tooltip {
+  position: fixed;
+  z-index: 10000;
+  width: 280px;
+  background: linear-gradient(145deg, rgba(35, 35, 45, 0.98) 0%, rgba(25, 25, 35, 0.98) 100%);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 
+    0 20px 40px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  pointer-events: none;
+}
+
+.tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.tooltip-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.tooltip-badge {
+  padding: 3px 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+}
+
+.tooltip-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tooltip-desc {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.tooltip-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.detail-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.detail-text strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.detail-item.price-highlight {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.detail-item.price-highlight strong {
+  color: #667eea;
+  font-size: 15px;
+}
+
+.tooltip-arrow {
+  position: absolute;
+  left: -6px;
+  top: 24px;
+  width: 12px;
+  height: 12px;
+  background: rgba(35, 35, 45, 0.98);
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  transform: rotate(45deg);
+}
+
+/* 悬浮提示动画 */
+.tooltip-fade-enter-active,
+.tooltip-fade-leave-active {
+  transition: all 0.2s ease;
+}
+
+.tooltip-fade-enter-from,
+.tooltip-fade-leave-to {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
 /* 余额划转 */
 .transfer-section {
   margin-bottom: 24px;
@@ -1865,6 +2078,97 @@ function getLedgerTypeText(type) {
 .help-arrow {
   font-size: 16px;
   color: rgba(255, 255, 255, 0.4);
+}
+
+/* 新手引导设置 */
+.settings-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-label {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.15);
+  transition: all 0.3s ease;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #fff;
+  transition: all 0.3s ease;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+  background-color: #1a1a1a;
+}
+
+.toggle-switch:hover .toggle-slider {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.toggle-switch input:checked:hover + .toggle-slider {
+  background: #fff;
 }
 
 /* 空提示 */

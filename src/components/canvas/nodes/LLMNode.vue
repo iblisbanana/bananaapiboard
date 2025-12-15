@@ -17,11 +17,11 @@ const props = defineProps({
 const canvasStore = useCanvasStore()
 const userInfo = inject('userInfo')
 
-// LLM 类型配置
+// LLM 类型配置 - 黑白灰简洁风格
 const LLM_TYPES = {
   'llm-prompt-enhance': {
     label: '提示词优化',
-    icon: '✨',
+    icon: 'A+',
     description: 'AI 优化提示词，生成更专业的描述',
     inputType: 'text',
     outputType: 'text',
@@ -29,7 +29,7 @@ const LLM_TYPES = {
   },
   'llm-image-describe': {
     label: '图片描述',
-    icon: '🔍',
+    icon: '◎',
     description: '分析图片，生成详细提示词',
     inputType: 'image',
     outputType: 'text',
@@ -37,7 +37,7 @@ const LLM_TYPES = {
   },
   'llm-content-expand': {
     label: '内容扩写',
-    icon: '✎',
+    icon: '≡',
     description: 'AI 扩展内容，增加细节',
     inputType: 'text',
     outputType: 'text',
@@ -84,6 +84,17 @@ const outputText = computed(() => props.data.output?.content || '')
 
 // 积分消耗
 const pointsCost = computed(() => getLLMCost(typeConfig.value.action))
+
+// 格式化积分显示（支持小数点后2位）
+const formattedPointsCost = computed(() => {
+  const cost = pointsCost.value
+  // 如果是整数，直接显示整数
+  if (Number.isInteger(cost)) {
+    return cost.toString()
+  }
+  // 否则显示最多2位小数，去除末尾的0
+  return parseFloat(cost.toFixed(2)).toString()
+})
 
 // 用户积分
 const userPoints = computed(() => {
@@ -304,7 +315,7 @@ function handleAddClick(event) {
       
       <!-- 操作按钮 -->
       <div class="llm-actions">
-        <span class="points-cost">💎 {{ pointsCost }}</span>
+        <span class="points-cost-display">{{ formattedPointsCost }} 积分</span>
         
         <button 
           v-if="!outputText"
@@ -312,7 +323,7 @@ function handleAddClick(event) {
           :disabled="!canExecute || data.status === 'processing'"
           @click="handleExecute"
         >
-          {{ data.status === 'processing' ? '⏳ 处理中' : '✨ 执行' }}
+          {{ data.status === 'processing' ? '...' : '→ 执行' }}
         </button>
         
         <button 
@@ -320,7 +331,7 @@ function handleAddClick(event) {
           class="canvas-node-btn secondary"
           @click="handleRedo"
         >
-          🔄 重新执行
+          ⟲ 重新执行
         </button>
       </div>
       
@@ -459,9 +470,30 @@ function handleAddClick(event) {
   border-top: 1px solid var(--canvas-border-subtle);
 }
 
+/* 旧的积分显示 - 黑白灰风格（保留兼容） */
 .points-cost {
-  font-size: 12px;
-  color: var(--canvas-accent-banana);
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 新的积分显示样式 - 黑白灰风格 */
+.points-cost-display {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(251, 191, 36, 0.1);
+  padding: 4px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
 /* 端口样式 - 完全隐藏（但保留给 Vue Flow 用于边渲染） */
@@ -482,16 +514,17 @@ function handleAddClick(event) {
 
 .node-add-btn {
   position: absolute;
-  right: -12px;
+  right: -52px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
+  font-weight: 300;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -501,16 +534,16 @@ function handleAddClick(event) {
   z-index: 10;
 }
 
-.canvas-node:hover .node-add-btn {
+.canvas-node:hover .node-add-btn,
+.llm-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 /* 节点内容区域 */

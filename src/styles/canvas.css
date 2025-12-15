@@ -353,10 +353,14 @@
   height: 36px;
   border-radius: var(--canvas-radius-sm);
   background: var(--canvas-bg-elevated);
+  border: 1px solid var(--canvas-border-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--canvas-text-secondary);
+  font-family: system-ui, -apple-system, sans-serif;
 }
 
 .node-selector-item.selected .node-selector-icon {

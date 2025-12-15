@@ -2,36 +2,43 @@
 /**
  * CanvasEmptyState.vue - 空白画布引导
  */
-import { inject } from 'vue'
+import { inject, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCanvasStore } from '@/stores/canvas'
 import { NODE_TYPES } from '@/config/canvas/nodeTypes'
+import { useI18n } from '@/i18n'
 
+const { t } = useI18n()
 const router = useRouter()
 const canvasStore = useCanvasStore()
 const openTemplates = inject('openTemplates')
 
 // 快速操作按钮 - 黑白灰风格SVG图标
-const quickActions = [
+const quickActions = computed(() => [
   { 
     icon: 'text-to-video', 
-    label: '文字生视频', 
+    label: t('canvas.emptyState.textToVideo'), 
     action: () => createTextToVideo() 
   },
   { 
     icon: 'image-to-video', 
-    label: '图片转视频', 
+    label: t('canvas.emptyState.imageToVideo'), 
     action: () => createImageToVideo() 
   },
   { 
     icon: 'ref-to-image', 
-    label: '参考图生图', 
+    label: t('canvas.emptyState.refToImage'), 
     action: () => createRefToImage() 
   }
-]
+])
 
 // 创建文生视频工作流
 function createTextToVideo() {
+  // 如果没有标签，先创建一个
+  if (canvasStore.workflowTabs.length === 0) {
+    canvasStore.createTab()
+  }
+  
   const textNode = canvasStore.addNode({
     type: NODE_TYPES.TEXT_INPUT,
     position: { x: 100, y: 200 },
@@ -52,6 +59,11 @@ function createTextToVideo() {
 
 // 创建图生视频工作流
 function createImageToVideo() {
+  // 如果没有标签，先创建一个
+  if (canvasStore.workflowTabs.length === 0) {
+    canvasStore.createTab()
+  }
+  
   const imageNode = canvasStore.addNode({
     type: NODE_TYPES.IMAGE_INPUT,
     position: { x: 100, y: 200 },
@@ -72,6 +84,11 @@ function createImageToVideo() {
 
 // 创建参考图生图工作流
 function createRefToImage() {
+  // 如果没有标签，先创建一个
+  if (canvasStore.workflowTabs.length === 0) {
+    canvasStore.createTab()
+  }
+  
   const imageNode = canvasStore.addNode({
     type: NODE_TYPES.IMAGE_INPUT,
     position: { x: 100, y: 200 },
@@ -104,6 +121,11 @@ function goToMyWorkflows() {
 
 // 双击创建提示
 function handleDoubleClickHint() {
+  // 如果没有标签，先创建一个
+  if (canvasStore.workflowTabs.length === 0) {
+    canvasStore.createTab()
+  }
+  
   canvasStore.openNodeSelector(
     { x: window.innerWidth / 2, y: window.innerHeight / 2 },
     'canvas'
@@ -121,7 +143,7 @@ function handleDoubleClickHint() {
       </svg>
     </div>
     <div class="canvas-empty-title">
-      <strong>双击</strong> 画布自由生成，或查看工作流模板
+      <strong>{{ t('canvas.emptyState.doubleClick') }}</strong> {{ t('canvas.emptyState.hint') }}
     </div>
     
     <!-- 快捷操作按钮 -->
@@ -174,7 +196,7 @@ function handleDoubleClickHint() {
             <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
           </svg>
         </span>
-        工作流
+        {{ t('canvas.workflow') }}
       </button>
       
       <!-- 我的工作流按钮 -->
@@ -185,7 +207,7 @@ function handleDoubleClickHint() {
             <path d="M8 10H16M8 14H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </span>
-        我的工作流
+        {{ t('canvas.myWorkflows') }}
       </button>
     </div>
   </div>

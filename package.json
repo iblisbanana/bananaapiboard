@@ -18,7 +18,8 @@
     "pinia": "^3.0.4",
     "three": "^0.182.0",
     "vue": "^3.4.29",
-    "vue-router": "^4.2.5"
+    "vue-router": "^4.2.5",
+    "vue3-virtual-scroll-list": "^0.2.1"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.10",

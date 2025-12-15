@@ -65,6 +65,7 @@ const pointsCost = computed(() => {
   return costs[selectedModel.value]?.[selectedDuration.value] || 20
 })
 
+
 // 用户积分
 const userPoints = computed(() => {
   if (!userInfo?.value) return 0
@@ -267,7 +268,7 @@ function handleAddClick(event) {
         {{ data.title || (isImageToVideo ? '图生视频' : '文生视频') }}
       </div>
       <div class="canvas-node-actions">
-        <button class="canvas-node-action-btn" title="下载" @click="downloadVideo" v-if="hasOutput">⬇️</button>
+        <button class="canvas-node-action-btn" title="下载" @click="downloadVideo" v-if="hasOutput">↓</button>
         <button class="canvas-node-action-btn" title="更多">≡</button>
       </div>
     </div>
@@ -344,8 +345,10 @@ function handleAddClick(event) {
         </div>
         
         <div class="gen-actions">
-          <!-- 积分显示 -->
-          <span class="points-cost">💎 {{ pointsCost }}</span>
+          <!-- 积分消耗显示 -->
+          <span class="points-cost-display">
+            {{ pointsCost }} 积分
+          </span>
           
           <!-- 生成按钮 -->
           <button 
@@ -354,7 +357,7 @@ function handleAddClick(event) {
             :disabled="data.status === 'processing' || (!inheritedText && !inheritedImages.length)"
             @click="handleGenerate"
           >
-            {{ data.status === 'processing' ? '⏳ 生成中' : '🚀 开始生成' }}
+            {{ data.status === 'processing' ? '...' : '→ 生成' }}
           </button>
           
           <!-- 重新生成按钮 -->
@@ -363,7 +366,7 @@ function handleAddClick(event) {
             class="canvas-node-btn secondary"
             @click="handleRegenerate"
           >
-            🔄 重新生成
+            ⟲ 重新生成
           </button>
         </div>
       </div>
@@ -545,9 +548,30 @@ function handleAddClick(event) {
   gap: 8px;
 }
 
+/* 旧的积分显示 - 黑白灰风格（保留兼容） */
 .points-cost {
-  font-size: 12px;
-  color: var(--canvas-accent-banana);
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 新的积分显示样式 - 黑白灰风格 */
+.points-cost-display {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(251, 191, 36, 0.1);
+  padding: 4px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
 }
 
 /* 端口样式 - 完全隐藏（但保留给 Vue Flow 用于边渲染） */
@@ -568,16 +592,17 @@ function handleAddClick(event) {
 
 .node-add-btn {
   position: absolute;
-  right: -12px;
+  right: -52px;
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: var(--canvas-bg-elevated, #242424);
-  border: 1px solid var(--canvas-border-default, #3a3a3a);
-  color: var(--canvas-text-secondary, #a0a0a0);
-  font-size: 16px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 22px;
+  font-weight: 300;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -587,16 +612,16 @@ function handleAddClick(event) {
   z-index: 10;
 }
 
-.canvas-node:hover .node-add-btn {
+.canvas-node:hover .node-add-btn,
+.video-gen-node.selected .node-add-btn {
   opacity: 1;
 }
 
 .node-add-btn:hover {
-  background: var(--canvas-accent-primary, #3b82f6);
-  border-color: var(--canvas-accent-primary, #3b82f6);
-  color: white;
-  transform: translateY(-50%) scale(1.15);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-50%) scale(1.1);
 }
 
 /* 节点内容区域 */

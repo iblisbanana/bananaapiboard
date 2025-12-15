@@ -2,16 +2,21 @@
 /**
  * CanvasToolbar.vue - 左侧工具栏
  */
-import { ref, inject } from 'vue'
+import { ref, inject, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useCanvasStore } from '@/stores/canvas'
 import { saveWorkflowLocal } from '@/api/canvas/workflow'
 import UserProfilePanel from './UserProfilePanel.vue'
+import { useI18n } from '@/i18n'
 
+const { t } = useI18n()
 const router = useRouter()
 const canvasStore = useCanvasStore()
 const userInfo = inject('userInfo')
 const openTemplates = inject('openTemplates')
+const openWorkflowPanel = inject('openWorkflowPanel')
+const openAssetPanel = inject('openAssetPanel')
+const openHistoryPanel = inject('openHistoryPanel')
 
 // 个人中心面板
 const showProfilePanel = ref(false)
@@ -21,37 +26,37 @@ const profilePanelPosition = ref({ x: 80, y: 100 })
 const showNodePanel = ref(false)
 const nodeMenuHoverTimer = ref(null)
 
-// 节点类型列表
-const nodeTypes = [
+// 节点类型列表 - 黑白灰简洁风格
+const nodeTypes = computed(() => [
   {
     type: 'text-input',
-    icon: 'T',
-    label: '文本',
+    icon: 'Aa',
+    label: t('canvas.nodes.text'),
     tag: 'Gemini3',
-    description: '脚本、广告词、品牌文案'
+    description: t('canvas.nodes.textDesc')
   },
   {
     type: 'image-input',
-    icon: '🖼',
-    label: '图片',
+    icon: '◫',
+    label: t('canvas.nodes.image'),
     tag: 'Banana Pro',
     description: null
   },
   {
     type: 'video-input',
-    icon: '🎬',
-    label: '视频',
+    icon: '▷',
+    label: t('canvas.nodes.video'),
     tag: null,
     description: null
   },
   {
     type: 'audio-input',
-    icon: '🎵',
-    label: '音频',
+    icon: '♪',
+    label: t('canvas.nodes.audio'),
     tag: 'Beta',
     description: null
   }
-]
+])
 
 // 鼠标进入+号按钮
 function handleAddBtnMouseEnter() {
@@ -114,9 +119,25 @@ function handleOpenTemplates() {
   }
 }
 
-// 打开历史记录（跳转到工作流列表）
+// 打开我的工作流面板
+function openWorkflows() {
+  if (openWorkflowPanel) {
+    openWorkflowPanel()
+  }
+}
+
+// 打开我的资产面板
+function openAssets() {
+  if (openAssetPanel) {
+    openAssetPanel()
+  }
+}
+
+// 打开历史记录面板
 function openHistory() {
-  router.push('/workflows')
+  if (openHistoryPanel) {
+    openHistoryPanel()
+  }
 }
 
 // 打开保存对话框
@@ -125,7 +146,7 @@ const emit = defineEmits(['openSaveDialog'])
 function saveWorkflow() {
   const data = canvasStore.exportWorkflow()
   if (data.nodes.length === 0) {
-    alert('画布为空，无需保存')
+    // 画布为空时静默返回，不做任何提示
     return
   }
   
@@ -164,7 +185,7 @@ function handleUserUpdate() {
 </script>
 
 <template>
-  <div class="canvas-toolbar">
+  <div class="canvas-toolbar" @click.stop>
     <!-- 添加节点按钮（主按钮） -->
     <div 
       class="add-node-container"
@@ -173,7 +194,7 @@ function handleUserUpdate() {
     >
       <button 
         class="canvas-toolbar-btn add-btn" 
-        title="添加节点"
+        :title="t('canvas.addNode')"
       >
         +
       </button>
@@ -185,7 +206,7 @@ function handleUserUpdate() {
         @mouseenter="handleNodePanelMouseEnter"
         @mouseleave="handleAddMenuMouseLeave"
       >
-        <div class="node-panel-title">添加节点</div>
+        <div class="node-panel-title">{{ t('canvas.addNode') }}</div>
         
         <!-- 节点类型列表 -->
         <div class="node-list">
@@ -207,13 +228,13 @@ function handleUserUpdate() {
         </div>
         
         <div class="node-panel-divider"></div>
-        <div class="node-panel-title">添加资源</div>
+        <div class="node-panel-title">{{ t('canvas.addResource') }}</div>
         
         <!-- 上传选项 -->
         <div class="node-item" @click="handleUpload">
-          <div class="node-icon">⬆</div>
+          <div class="node-icon">↑</div>
           <div class="node-info">
-            <div class="node-label">上传</div>
+            <div class="node-label">{{ t('common.upload') }}</div>
           </div>
         </div>
       </div>
@@ -221,24 +242,41 @@ function handleUserUpdate() {
     
     <div class="canvas-toolbar-divider"></div>
     
-    <!-- 工作流模板 -->
+    <!-- 我的资产 -->
     <button 
-      class="canvas-toolbar-btn icon-btn" 
-      title="工作流模板"
-      @click="handleOpenTemplates"
+      class="canvas-toolbar-btn icon-btn asset-btn" 
+      :title="t('canvas.assets')"
+      @click="openAssets"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="7" height="7"></rect>
-        <rect x="14" y="3" width="7" height="7"></rect>
-        <rect x="14" y="14" width="7" height="7"></rect>
-        <rect x="3" y="14" width="7" height="7"></rect>
+        <!-- 资产图标 -->
+        <path d="M20 7h-9"/>
+        <path d="M14 17H5"/>
+        <circle cx="17" cy="17" r="3"/>
+        <circle cx="7" cy="7" r="3"/>
+      </svg>
+    </button>
+    
+    <!-- 我的工作流 -->
+    <button 
+      class="canvas-toolbar-btn icon-btn" 
+      :title="t('canvas.myWorkflows')"
+      @click="openWorkflows"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <!-- 工作流图标：三个节点 + 连接线 -->
+        <rect x="2" y="4" width="6" height="6" rx="1"></rect>
+        <rect x="9" y="14" width="6" height="6" rx="1"></rect>
+        <rect x="16" y="4" width="6" height="6" rx="1"></rect>
+        <path d="M5 10 L5 12 L12 12 L12 14"></path>
+        <path d="M19 10 L19 12 L12 12"></path>
       </svg>
     </button>
     
     <!-- 历史记录 -->
     <button 
-      class="canvas-toolbar-btn icon-btn" 
-      title="历史记录"
+      class="canvas-toolbar-btn icon-btn history-btn" 
+      :title="t('canvas.history')"
       @click="openHistory"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -247,20 +285,10 @@ function handleUserUpdate() {
       </svg>
     </button>
     
-    <!-- 聊天/帮助 -->
-    <button 
-      class="canvas-toolbar-btn icon-btn" 
-      title="帮助"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-      </svg>
-    </button>
-    
     <!-- 保存工作流 -->
     <button 
       class="canvas-toolbar-btn icon-btn" 
-      title="保存工作流"
+      :title="t('canvas.saveWorkflow')"
       @click="saveWorkflow"
     >
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -275,7 +303,7 @@ function handleUserUpdate() {
     <!-- 个人中心按钮 -->
     <button 
       class="canvas-toolbar-btn user-btn" 
-      :title="`个人中心 | 积分: ${getTotalPoints()}`"
+      :title="`${t('nav.user')} | ${t('user.points')}: ${getTotalPoints()}`"
       @click="openProfilePanel"
     >
       {{ userInfo?.username?.charAt(0)?.toUpperCase() || 'P' }}
@@ -366,6 +394,7 @@ function handleUserUpdate() {
 .icon-btn:hover svg {
   stroke: rgba(255, 255, 255, 0.9);
 }
+
 
 /* 用户按钮 */
 .user-btn {
@@ -458,13 +487,17 @@ function handleUserUpdate() {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 16px;
+  font-weight: 600;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: system-ui, -apple-system, sans-serif;
+  letter-spacing: -0.5px;
 }
 
 .node-info {
