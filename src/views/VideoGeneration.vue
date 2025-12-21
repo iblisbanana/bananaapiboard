@@ -92,9 +92,8 @@ const currentPointsCost = computed(() => {
 const userPackageInfo = computed(() => {
   if (!me.value) return { hasPackage: false, concurrentLimit: 1 }
   
-  // 判断是否有活跃套餐（套餐积分 > 0 且未过期）
-  const hasPackage = (me.value.package_points || 0) > 0 && 
-                     me.value.package_points_expires_at && 
+  // 判断是否有活跃套餐（只要套餐未过期即为VIP，不要求积分>0）
+  const hasPackage = me.value.package_points_expires_at && 
                      me.value.package_points_expires_at > Date.now()
   
   return {

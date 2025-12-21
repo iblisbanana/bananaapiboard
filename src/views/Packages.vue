@@ -728,7 +728,29 @@ const rechargeError = ref('')
 const paymentMethods = ref([])
 const quickAmounts = [300, 500, 1000, 5000, 10000] // 单位：分
 
-const packageOrder = { daily: 1, weekly: 2, monthly: 3, quarterly: 4, yearly: 5 }
+// 使用后端返回的 level 字段来判断套餐等级
+// 注意：如果没有 level 字段，则回退到 packageOrder 映射
+const packageOrder = { daily: 1, weekly: 2, monthly: 3, quarterly: 4, yearly: 5, supmonthly: 4, quarter: 5, year: 6 }
+
+// 根据套餐类型获取等级（优先使用 packages 中的 level 字段）
+function getPackageLevel(type) {
+  const pkg = packages.value.find(p => p.type === type)
+  if (pkg && typeof pkg.level === 'number') {
+    return pkg.level
+  }
+  return packageOrder[type] || 0
+}
+
+// 获取当前用户套餐的等级
+function getCurrentPackageLevel() {
+  if (!activePackage.value) return 0
+  // 优先使用 user_packages 中存储的 package_level
+  if (typeof activePackage.value.package_level === 'number' && activePackage.value.package_level > 0) {
+    return activePackage.value.package_level
+  }
+  // 回退到根据类型查找
+  return getPackageLevel(activePackage.value.package_type)
+}
 
 function getPackageStyle(type) {
   const styles = {
@@ -783,9 +805,9 @@ function isCurrentPackage(type) {
 
 function canUpgrade(type) {
   if (!activePackage.value) return false
-  const currentOrder = packageOrder[activePackage.value.package_type] || 0
-  const newOrder = packageOrder[type] || 0
-  return newOrder > currentOrder
+  const currentLevel = getCurrentPackageLevel()
+  const newLevel = getPackageLevel(type)
+  return newLevel > currentLevel
 }
 
 function isDowngrade(type) {
@@ -793,11 +815,10 @@ function isDowngrade(type) {
     console.log('[isDowngrade] 用户没有活跃套餐，不是降级')
     return false
   }
-  const currentType = activePackage.value.package_type
-  const currentOrder = packageOrder[currentType] || 0
-  const newOrder = packageOrder[type] || 0
-  const isDowngradeResult = newOrder < currentOrder
-  console.log(`[isDowngrade] 当前套餐类型: ${currentType}(等级${currentOrder}), 新套餐类型: ${type}(等级${newOrder}), 是否降级: ${isDowngradeResult}`)
+  const currentLevel = getCurrentPackageLevel()
+  const newLevel = getPackageLevel(type)
+  const isDowngradeResult = newLevel < currentLevel
+  console.log(`[isDowngrade] 当前套餐等级: ${currentLevel}, 新套餐等级: ${newLevel}, 是否降级: ${isDowngradeResult}`)
   return isDowngradeResult
 }
 
@@ -1384,10 +1405,10 @@ function findMaxAffordablePackage(balance) {
     return null
   }
   
-  // 按照套餐等级排序，找到最大的套餐
+  // 按照套餐等级排序，找到最大的套餐（优先使用 level 字段）
   affordablePackages.sort((a, b) => {
-    const orderA = packageOrder[a.type] || 0
-    const orderB = packageOrder[b.type] || 0
+    const orderA = a.level || packageOrder[a.type] || 0
+    const orderB = b.level || packageOrder[b.type] || 0
     return orderB - orderA
   })
   

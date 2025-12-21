@@ -1,9 +1,12 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { redeemVoucher } from '@/api/client'
 import { getTheme, setTheme, toggleTheme as toggleThemeUtil, themes } from '@/utils/theme'
 import { getTenantHeaders, getModelDisplayName } from '@/config/tenant'
 import { formatPoints, formatBalance } from '@/utils/format'
+
+const route = useRoute()
 
 const token = localStorage.getItem('token')
 const me = ref(null)
@@ -1411,6 +1414,37 @@ async function loadBillOrders() {
       const data = await res.json()
       billOrders.value = data.orders || []
       billTotal.value = data.total || 0
+      
+      // 只有在URL中有order_no参数时（支付完成后返回），才执行轮询刷新
+      // 避免每次查看账单列表时都触发刷新
+      const urlOrderNo = route.query.order_no
+      
+      if (urlOrderNo) {
+        console.log('[loadBillOrders] 检测到支付返回参数，立即刷新用户信息...')
+        
+        // 立即刷新一次
+        await load()
+        // 触发全局用户信息更新事件（更新导航栏余额）
+        window.dispatchEvent(new CustomEvent('user-info-updated'))
+        
+        // 轮询刷新，确保获取到最新余额（最多重试5次，每次间隔2秒）
+        const maxRetries = 5
+        const pollInterval = 2000 // 2秒间隔
+        
+        for (let i = 0; i < maxRetries; i++) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval))
+          console.log(`[loadBillOrders] 轮询刷新余额 (${i + 1}/${maxRetries})...`)
+          await load()
+          // 触发全局用户信息更新事件
+          window.dispatchEvent(new CustomEvent('user-info-updated'))
+        }
+        
+        console.log('[loadBillOrders] 轮询结束，已重试', maxRetries, '次')
+        
+        // 清除URL参数，避免重复执行
+        const newUrl = window.location.pathname + (route.query.tab ? `?tab=${route.query.tab}` : '')
+        window.history.replaceState({}, '', newUrl)
+      }
     }
   } catch (e) {
     console.error('[loadBillOrders] error:', e)
@@ -1540,14 +1574,20 @@ async function checkPaymentReturn() {
     const fiveMinutes = 5 * 60 * 1000
     
     if (now - paymentTime < fiveMinutes) {
-      console.log('[User] 检测到支付返回，刷新用户信息...')
-      // 延迟5秒后刷新，给后端处理回调的时间
-      await new Promise(resolve => setTimeout(resolve, 5000))
+      console.log('[User] 检测到支付返回，立即刷新用户信息...')
       
-      // 多次尝试刷新，确保获取到最新数据
-      for (let i = 0; i < 3; i++) {
+      // 立即刷新一次
+      await load()
+      window.dispatchEvent(new CustomEvent('user-info-updated'))
+      
+      // 延迟2秒后开始轮询刷新，确保获取到最新数据（最多重试5次）
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
+      for (let i = 0; i < 5; i++) {
+        console.log(`[User] 轮询刷新余额 (${i + 1}/5)...`)
         await load()
-        if (i < 2) {
+        window.dispatchEvent(new CustomEvent('user-info-updated'))
+        if (i < 4) {
           await new Promise(resolve => setTimeout(resolve, 2000))
         }
       }
@@ -1557,9 +1597,6 @@ async function checkPaymentReturn() {
       setTimeout(() => {
         successMessage.value = ''
       }, 5000)
-      
-      // 触发全局用户信息更新事件（更新导航栏）
-      window.dispatchEvent(new CustomEvent('user-info-updated'))
     }
   }
 }
@@ -1578,6 +1615,12 @@ onMounted(async () => {
   
   // 立即检查是否有待刷新的标记
   checkPaymentReturn()
+  
+  // 如果URL中有order_no参数且当前在bills tab，加载订单列表
+  if (route.query.order_no || route.query.tab === 'bills') {
+    activeTab.value = 'bills'
+    await loadBillOrders()
+  }
   
   // 监听页面可见性变化
   document.addEventListener('visibilitychange', handleVisibilityChange)
