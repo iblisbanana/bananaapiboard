@@ -235,6 +235,16 @@ export async function loadBrandConfig(forceReload = false) {
         console.log('[tenant] 模型积分配置已更新:', data.modelPricing)
       }
       
+      // 更新完整模型配置（包含 supportedModes，用于前端模式过滤）
+      if (data.image_models) {
+        runtimeConfig.image_models = data.image_models
+        console.log('[tenant] 图片模型完整配置已更新:', data.image_models)
+      }
+      if (data.video_models) {
+        runtimeConfig.video_models = data.video_models
+        console.log('[tenant] 视频模型完整配置已更新:', data.video_models)
+      }
+      
       // 保存到本地存储
       saveToStorage(runtimeConfig)
       
@@ -477,7 +487,8 @@ export const getModelDescription = (modelKey, type = 'image') => {
 }
 
 // 获取所有可用的图片模型列表（从配置中动态获取）
-export const getAvailableImageModels = () => {
+// mode: 可选参数，'t2i' = 文生图，'i2i' = 图生图，不传则返回所有
+export const getAvailableImageModels = (mode = null) => {
   const modelNames = getModelNames()
   const modelEnabled = getModelEnabled()
   const modelDescriptions = getModelDescriptions()
@@ -487,17 +498,23 @@ export const getAvailableImageModels = () => {
   const descriptions = modelDescriptions?.image || {}
   const pricing = modelPricing?.image || {}
   
+  // 获取新格式的模型配置（包含 supportedModes 和 channels）
+  const imageModelsConfig = config.image_models || []
+  
   // 默认模型配置（当没有任何配置时使用）
   // 注意：description 应从租户管理后台(9000端口)配置，这里默认为空
   const defaultModels = [
-    { value: 'nano-banana', label: 'Nano Banana', icon: '🍌', points: 1, description: '', hasResolutionPricing: false, pointsCost: 1 },
-    { value: 'nano-banana-hd', label: 'Nano Banana HD', icon: '🍌', points: 3, description: '', hasResolutionPricing: false, pointsCost: 3 },
-    { value: 'nano-banana-2', label: 'Nano Banana 2', icon: '🍌', points: null, description: '', hasResolutionPricing: true, pointsCost: { '1k': 3, '2k': 4, '4k': 5 } }
+    { value: 'nano-banana', label: 'Nano Banana', icon: '🍌', points: 1, description: '', hasResolutionPricing: false, pointsCost: 1, supportedModes: 'both' },
+    { value: 'nano-banana-hd', label: 'Nano Banana HD', icon: '🍌', points: 3, description: '', hasResolutionPricing: false, pointsCost: 3, supportedModes: 'both' },
+    { value: 'nano-banana-2', label: 'Nano Banana 2', icon: '🍌', points: null, description: '', hasResolutionPricing: true, pointsCost: { '1k': 3, '2k': 4, '4k': 5 }, supportedModes: 'both' }
   ]
   
-  // 如果配置为空，返回默认模型
+  // 如果配置为空，返回默认模型（根据模式过滤）
   if (Object.keys(imageModels).length === 0) {
-    return defaultModels
+    return mode ? defaultModels.filter(m => {
+      const supportedModes = m.supportedModes || 'both'
+      return supportedModes === 'both' || supportedModes === mode
+    }) : defaultModels
   }
   
   // 从配置中构建模型列表
@@ -506,6 +523,16 @@ export const getAvailableImageModels = () => {
     // 只添加启用的模型
     if (enabledModels[key] !== false) {
       const modelPricingConfig = pricing[key] || {}
+      // 查找新格式配置中的 supportedModes
+      const modelFullConfig = imageModelsConfig.find(m => m.name === key || m.id === key)
+      const supportedModes = modelFullConfig?.supportedModes || 'both'
+      
+      // 根据模式过滤
+      if (mode) {
+        if (mode === 't2i' && supportedModes === 'i2i') continue
+        if (mode === 'i2i' && supportedModes === 't2i') continue
+      }
+      
       models.push({
         value: key,
         label: name || key,
@@ -513,12 +540,16 @@ export const getAvailableImageModels = () => {
         description: descriptions[key] || '',
         // 积分配置
         hasResolutionPricing: modelPricingConfig.hasResolutionPricing || false,
-        pointsCost: modelPricingConfig.pointsCost || 1
+        pointsCost: modelPricingConfig.pointsCost || 1,
+        supportedModes // 传递给前端，以便需要时使用
       })
     }
   }
   
-  return models.length > 0 ? models : defaultModels
+  return models.length > 0 ? models : (mode ? defaultModels.filter(m => {
+    const supportedModes = m.supportedModes || 'both'
+    return supportedModes === 'both' || supportedModes === mode
+  }) : defaultModels)
 }
 
 // 获取所有可用的视频模型列表（从配置中动态获取）

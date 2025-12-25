@@ -11,7 +11,7 @@ import { shouldHistoryDrawerOpenByDefault } from '@/utils/deviceDetection'
 import VirtualList from 'vue3-virtual-scroll-list'
 
 const prompt = ref('')
-const model = ref('nano-banana-2') // 默认使用 Nano Banana 2
+const model = ref('') // 默认为空，会在 onMounted 中设置为模型列表第一个
 const aspectRatio = ref('auto') // 默认使用 Auto
 const imageSize = ref('4K') // 图生图默认尺寸改为 4K
 const loading = ref(false)
@@ -94,11 +94,19 @@ const externalLinkConfig = ref({
 
 // 监听图生图模式切换，自动设置默认模型和尺寸
 watch(mode, (newMode) => {
-  if (newMode === 'image') {
-    // 切换到图生图模式时，设置默认值
-    model.value = 'nano-banana-2'
-    imageSize.value = '4K'
-    console.log('[mode-switch] 切换到图生图模式，已设置默认: 模型=nano-banana-2, 尺寸=4K')
+  // 模式切换时，如果当前模型不在新模式的可用列表中，则切换到第一个可用模型
+  const models = availableModels.value
+  const currentModelInList = models.find(m => m.value === model.value)
+  if (!currentModelInList && models.length > 0) {
+    model.value = models[0].value
+    console.log(`[mode-switch] 模式切换到${newMode}，模型已重置为:`, model.value)
+    
+    // 如果是按分辨率计费的模型，设置默认尺寸
+    const modelInfo = models[0]
+    if (modelInfo.pointsCost && typeof modelInfo.pointsCost === 'object') {
+      const firstSize = Object.keys(modelInfo.pointsCost)[0]?.toUpperCase() || '1K'
+      imageSize.value = firstSize
+    }
   }
 })
 
@@ -1646,9 +1654,11 @@ const availableResolutions = computed(() => {
   return []
 })
 
-// 获取可用的图片模型列表（从配置动态获取）
+// 获取可用的图片模型列表（从配置动态获取，根据当前模式过滤）
 const availableModels = computed(() => {
-  return getAvailableImageModels()
+  // 根据当前模式过滤：'text' = 文生图(t2i), 'image' = 图生图(i2i)
+  const currentMode = mode.value === 'image' ? 'i2i' : 't2i'
+  return getAvailableImageModels(currentMode)
 })
 
 // 获取模型显示名称
@@ -1935,6 +1945,20 @@ onMounted(async () => {
   me.value = await getMe()
   
   await loadHistory()
+  
+  // 初始化默认模型（使用模型列表的第一个）
+  const models = availableModels.value
+  if (models.length > 0 && !model.value) {
+    model.value = models[0].value
+    console.log('[init] 默认模型已设置为:', model.value)
+    
+    // 如果是按分辨率计费的模型，设置默认尺寸
+    const modelInfo = models[0]
+    if (modelInfo.pointsCost && typeof modelInfo.pointsCost === 'object') {
+      const firstSize = Object.keys(modelInfo.pointsCost)[0]?.toUpperCase() || '1K'
+      imageSize.value = firstSize
+    }
+  }
   
   // 初始化历史记录数量
   lastHistoryLength.value = history.value.length

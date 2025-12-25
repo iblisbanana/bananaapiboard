@@ -61,8 +61,12 @@ const dragOverIndex = ref(-1)
 const showImageEditor = ref(false)
 const editorInitialTool = ref('')
 
-// 生成参数
-const selectedModel = ref(props.data.model || 'nano-banana-2')
+// 生成参数 - 默认使用模型列表第一个
+const getDefaultModel = () => {
+  const availableModels = getAvailableImageModels()
+  return availableModels.length > 0 ? availableModels[0].value : 'nano-banana-2'
+}
+const selectedModel = ref(props.data.model || getDefaultModel())
 const selectedResolution = ref(props.data.resolution || '1024')
 const selectedAspectRatio = ref(props.data.aspectRatio || 'auto')
 const selectedCount = ref(props.data.count || 1)
@@ -143,9 +147,35 @@ onUnmounted(() => {
   document.removeEventListener('click', handleModelDropdownClickOutside)
 })
 
-// 可用选项 - 从配置动态获取，支持新增模型自动同步
+// 检查是否有图片输入（用于判断文生图/图生图模式）
+const hasImageInput = computed(() => {
+  const allEdges = [...canvasStore.edges]
+  const allNodes = [...canvasStore.nodes]
+  const upstreamEdges = allEdges.filter(e => e.target === props.id)
+  
+  for (const edge of upstreamEdges) {
+    const sourceNode = allNodes.find(n => n.id === edge.source)
+    if (!sourceNode) continue
+    
+    // 检查上游节点是否有图片输出
+    const hasOutput = sourceNode.data?.output?.urls?.length > 0 || 
+                      sourceNode.data?.output?.url ||
+                      sourceNode.data?.sourceImages?.length > 0
+    if (hasOutput) return true
+    
+    // 检查是否是图片类型节点（非文本节点）
+    if (sourceNode.type === 'image' || sourceNode.type === 'imageGeneration') {
+      return true
+    }
+  }
+  return false
+})
+
+// 可用选项 - 从配置动态获取，支持新增模型自动同步，根据是否有参考图片过滤
 const models = computed(() => {
-  return getAvailableImageModels()
+  // 只有真正有图片输入时才是图生图模式，文本输入仍然是文生图模式
+  const currentMode = hasImageInput.value ? 'i2i' : 't2i'
+  return getAvailableImageModels(currentMode)
 })
 
 // 默认尺寸选项配置（当模型配置中没有指定积分时使用）
