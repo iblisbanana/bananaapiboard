@@ -14,7 +14,8 @@ import { useCanvasStore } from '@/stores/canvas'
 import { getTenantHeaders, isModelEnabled, getModelDisplayName, getApiUrl, getAvailableVideoModels } from '@/config/tenant'
 import { uploadImages } from '@/api/canvas/nodes'
 import { useI18n } from '@/i18n'
-import { showAlert, showInsufficientPointsDialog } from '@/composables/useCanvasDialog'
+import { showAlert, showInsufficientPointsDialog, showToast } from '@/composables/useCanvasDialog'
+import VideoClipEditor from '@/components/canvas/VideoClipEditor.vue'
 
 const { t } = useI18n()
 
@@ -55,8 +56,8 @@ const dragOverIndex = ref(-1)
 // 生成模式：image（图生视频）, text（纯文本）
 const generationMode = ref(props.data.generationMode || 'text')
 
-// 生成参数
-const selectedModel = ref(props.data.model || 'sora-2')
+// 生成参数 - 默认使用新版 sora2 整合模型
+const selectedModel = ref(props.data.model || 'sora2')
 const selectedAspectRatio = ref(props.data.aspectRatio || '16:9')
 const selectedDuration = ref(props.data.duration || '10')
 const selectedCount = ref(props.data.count || 1)
@@ -149,17 +150,23 @@ const currentModelConfig = computed(() => {
   return models.value.find(m => m.value === selectedModel.value) || {}
 })
 
-// 可用的时长选项（根据模型动态计算）
+// 可用的时长选项（优先从模型配置的 durations 数组获取，兼容从 pointsCost 计算）
 const availableDurations = computed(() => {
-  // 如果模型不支持时长计费，返回空数组
-  if (!currentModelConfig.value.hasDurationPricing) {
-    return []
+  // 优先使用模型配置中的 durations 数组
+  if (currentModelConfig.value.durations && currentModelConfig.value.durations.length > 0) {
+    return currentModelConfig.value.durations
   }
-  const pointsCostObj = currentModelConfig.value.pointsCost
-  if (typeof pointsCostObj !== 'object') {
-    return []
+  
+  // 兼容：如果模型支持时长计费，从 pointsCost 对象计算
+  if (currentModelConfig.value.hasDurationPricing) {
+    const pointsCostObj = currentModelConfig.value.pointsCost
+    if (typeof pointsCostObj === 'object') {
+      return Object.keys(pointsCostObj).filter(key => key !== 'hd_extra').sort((a, b) => Number(a) - Number(b))
+    }
   }
-  return Object.keys(pointsCostObj).filter(key => key !== 'hd_extra').sort((a, b) => Number(a) - Number(b))
+  
+  // 默认返回常用时长选项
+  return ['10', '15']
 })
 
 // 可用模型列表（从配置动态获取，支持新增模型自动同步）
@@ -919,9 +926,12 @@ function createNewOutputNode() {
 // 单个节点执行生成任务（后台轮询，不阻塞UI）
 async function executeNodeGeneration(nodeId, finalPrompt, finalImages, taskIndex) {
   try {
+    // 清除旧的任务 ID，避免角色创建时使用过期的 ID
     canvasStore.updateNodeData(nodeId, { 
       status: 'processing',
-      progress: '排队中...'
+      progress: '排队中...',
+      taskId: null,
+      soraTaskId: null
     })
     
     const result = await sendGenerateRequest(finalPrompt, finalImages)
@@ -1009,7 +1019,10 @@ async function pollVideoTaskForNode(taskId, nodeId) {
               output: {
                 type: 'video',
                 url: videoUrl
-              }
+              },
+              // 保存任务 ID，用于角色创建等功能
+              taskId: taskId,
+              soraTaskId: data.task_id || taskId
             })
             resolve(videoUrl)
             return
@@ -1147,10 +1160,12 @@ async function handleGenerate() {
     }
   }
   
-  // 更新目标节点状态
+  // 更新目标节点状态，清除旧的任务 ID
   canvasStore.updateNodeData(targetNodeId, { 
     status: 'processing',
-    progress: generateCount > 1 ? `并行生成 ${generateCount} 个视频...` : '排队中...'
+    progress: generateCount > 1 ? `并行生成 ${generateCount} 个视频...` : '排队中...',
+    taskId: null,
+    soraTaskId: null
   })
   
   try {
@@ -1236,7 +1251,10 @@ async function pollVideoTask(taskId) {
             output: {
               type: 'video',
               url: videoUrl
-            }
+            },
+            // 保存任务 ID，用于角色创建等功能
+            taskId: taskId,
+            soraTaskId: data.task_id || taskId
           })
           isGenerating.value = false
           return
@@ -1737,10 +1755,55 @@ function handleVideoLoaded(event) {
     normalizedUrl: normalizedVideoUrl.value?.substring(0, 60),
     duration: video.duration,
     videoWidth: video.videoWidth,
-    videoHeight: video.videoHeight
+    videoHeight: video.videoHeight,
+    isCharacterNode: props.data?.isCharacterNode,
+    clipStartTime: props.data?.clipStartTime
   })
-  // 设置到第一帧的位置（0.1秒处，确保不是完全黑屏）
-  if (video.currentTime === 0) {
+  
+  // 检测视频比例，如果是竖屏自动调整为 9:16
+  if (video.videoWidth && video.videoHeight) {
+    const isPortrait = video.videoHeight > video.videoWidth
+    const currentRatio = props.data.aspectRatio || selectedAspectRatio.value
+    
+    // 如果视频是竖屏但当前比例是横屏，自动切换
+    if (isPortrait && currentRatio !== '9:16') {
+      console.log('[VideoNode] 检测到竖屏视频，自动切换为 9:16 比例')
+      selectedAspectRatio.value = '9:16'
+      // 调整节点尺寸为竖屏比例（保持宽度，调整高度）
+      const portraitWidth = 280
+      const portraitHeight = 498 // 约 9:16 比例
+      nodeWidth.value = portraitWidth
+      nodeHeight.value = portraitHeight
+      // 更新节点数据
+      canvasStore.updateNodeData(props.id, {
+        aspectRatio: '9:16',
+        width: portraitWidth,
+        height: portraitHeight
+      })
+    }
+    // 如果视频是横屏但当前比例是竖屏，自动切换
+    else if (!isPortrait && currentRatio === '9:16') {
+      console.log('[VideoNode] 检测到横屏视频，自动切换为 16:9 比例')
+      selectedAspectRatio.value = '16:9'
+      // 调整节点尺寸为横屏比例
+      const landscapeWidth = 420
+      const landscapeHeight = 280
+      nodeWidth.value = landscapeWidth
+      nodeHeight.value = landscapeHeight
+      // 更新节点数据
+      canvasStore.updateNodeData(props.id, {
+        aspectRatio: '16:9',
+        width: landscapeWidth,
+        height: landscapeHeight
+      })
+    }
+  }
+  
+  // 如果是角色节点（裁剪视频），设置到裁剪起始位置
+  if (props.data?.isCharacterNode && props.data?.clipStartTime !== undefined) {
+    video.currentTime = props.data.clipStartTime
+  } else if (video.currentTime === 0) {
+    // 普通视频设置到第一帧
     video.currentTime = 0.1
   }
 }
@@ -1748,13 +1811,27 @@ function handleVideoLoaded(event) {
 // 视频可以播放时
 function handleVideoCanPlay(event) {
   const video = event.target
-  console.log('[VideoNode] 视频可以播放:', {
-    currentTime: video.currentTime,
-    readyState: video.readyState
-  })
-  // 确保显示第一帧
-  if (video.currentTime === 0) {
+  
+  // 如果是角色节点（裁剪视频），确保在裁剪范围内
+  if (props.data?.isCharacterNode && props.data?.clipStartTime !== undefined) {
+    if (video.currentTime < props.data.clipStartTime) {
+      video.currentTime = props.data.clipStartTime
+    }
+  } else if (video.currentTime === 0) {
     video.currentTime = 0.1
+  }
+}
+
+// 视频时间更新 - 用于角色节点裁剪视频循环播放
+function handleVideoTimeUpdate(event) {
+  const video = event.target
+  
+  // 如果是角色节点（裁剪视频），在裁剪范围内循环播放
+  if (props.data?.isCharacterNode && props.data?.clipEndTime !== undefined) {
+    if (video.currentTime >= props.data.clipEndTime) {
+      // 播放到结束时间，跳回起始时间
+      video.currentTime = props.data.clipStartTime || 0
+    }
   }
 }
 
@@ -1786,12 +1863,17 @@ function handleVideoMouseEnter() {
   }
 }
 
-// 鼠标离开视频区域 - 暂停并回到第一帧
+// 鼠标离开视频区域 - 暂停并回到起始位置
 function handleVideoMouseLeave() {
   const video = videoPlayerRef.value
   if (video && !video.paused) {
     video.pause()
-    video.currentTime = 0.1 // 回到第一帧
+    // 如果是角色节点，回到裁剪起始位置；否则回到第一帧
+    if (props.data?.isCharacterNode && props.data?.clipStartTime !== undefined) {
+      video.currentTime = props.data.clipStartTime
+    } else {
+      video.currentTime = 0.1
+    }
   }
 }
 
@@ -1806,10 +1888,449 @@ function openFullscreenPreview() {
 function closeFullscreenPreview() {
   isFullscreenPreview.value = false
 }
+
+// ========== 视频工具栏 ==========
+// 是否显示工具栏（选中且有视频内容）- 与 ImageNode 保持一致
+const showToolbar = computed(() => {
+  if (!props.selected) return false
+  return hasOutput.value
+})
+
+// 视频裁剪编辑器状态
+const showClipEditor = ref(false)
+
+// 工具栏处理函数
+function handleToolbarHD() {
+  console.log('[VideoNode] 工具栏：高清', props.id)
+  // 待开发功能
+}
+
+function handleToolbarAnalyze() {
+  console.log('[VideoNode] 工具栏：解析', props.id)
+  // 待开发功能
+}
+
+function handleToolbarCreateCharacter() {
+  console.log('[VideoNode] 工具栏：角色创建', props.id)
+  if (!normalizedVideoUrl.value) return
+  showClipEditor.value = true
+}
+
+// 关闭裁剪编辑器
+function closeClipEditor() {
+  showClipEditor.value = false
+}
+
+// 确认创建角色
+async function handleConfirmCreateCharacter(clipData) {
+  console.log('[VideoNode] 确认创建角色:', clipData)
+  
+  // 立即关闭裁剪编辑器，返回画布
+  showClipEditor.value = false
+  
+  // 在后台异步执行创建过程
+  executeCharacterCreation(clipData)
+}
+
+// 后台执行角色创建
+async function executeCharacterCreation(clipData) {
+  console.log('[VideoNode] 开始后台创建角色:', clipData)
+  
+  try {
+    const token = localStorage.getItem('token')
+    
+    // 1. 首先裁剪视频（获取真正裁剪后的视频文件）
+    console.log('[VideoNode] 开始裁剪视频片段...')
+    let clippedVideoUrl = null
+    
+    try {
+      const clipResponse = await fetch('/api/videos/clip', {
+        method: 'POST',
+        headers: {
+          ...getTenantHeaders(),
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          videoUrl: clipData.videoUrl,
+          startTime: clipData.startTime,
+          endTime: clipData.endTime
+        })
+      })
+      
+      if (clipResponse.ok) {
+        const clipResult = await clipResponse.json()
+        clippedVideoUrl = clipResult.url
+        console.log('[VideoNode] 视频裁剪成功:', clippedVideoUrl)
+      } else {
+        console.warn('[VideoNode] 视频裁剪失败，使用原始视频 URL 带时间范围')
+        // 裁剪失败时，回退到使用媒体片段 URL
+        clippedVideoUrl = `${clipData.videoUrl}#t=${clipData.startTime},${clipData.endTime}`
+      }
+    } catch (clipError) {
+      console.warn('[VideoNode] 视频裁剪出错，使用原始视频 URL:', clipError.message)
+      clippedVideoUrl = `${clipData.videoUrl}#t=${clipData.startTime},${clipData.endTime}`
+    }
+    
+    // 更新 clipData，使用裁剪后的视频 URL
+    const updatedClipData = {
+      ...clipData,
+      clippedVideoUrl: clippedVideoUrl
+    }
+    
+    // 检查是否有 Sora 生成的任务 ID（优先使用）
+    const soraTaskId = props.data?.soraTaskId || props.data?.taskId
+    let qiniuVideoUrl = null
+    let useTaskId = false
+    
+    if (soraTaskId) {
+      console.log('[VideoNode] 检测到 Sora 任务 ID，优先使用:', soraTaskId)
+      useTaskId = true
+      // 使用裁剪后的视频 URL
+      qiniuVideoUrl = clippedVideoUrl
+    } else {
+      // 没有任务 ID，需要上传视频到七牛云
+      console.log('[VideoNode] 没有任务 ID，需要上传视频到七牛云...')
+      
+      // 1. 先将视频上传到七牛云（如果是本地 URL）
+      let videoUrlForApi = clipData.videoUrl
+      if (clipData.videoUrl.startsWith('/api/')) {
+        // 本地视频，需要先获取完整 URL
+        videoUrlForApi = getApiUrl(clipData.videoUrl)
+      }
+      
+      // 2. 上传视频到七牛云获取公开 URL
+      const uploadResponse = await fetch('/api/videos/upload-to-qiniu', {
+        method: 'POST',
+        headers: {
+          ...getTenantHeaders(),
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          videoUrl: videoUrlForApi
+        })
+      })
+      
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json()
+        throw new Error(errorData.message || '视频上传失败')
+      }
+      
+      const uploadResult = await uploadResponse.json()
+      qiniuVideoUrl = uploadResult.url
+      console.log('[VideoNode] 视频上传成功:', qiniuVideoUrl)
+    }
+    
+    // 3. 调用角色创建 API
+    console.log('[VideoNode] 调用角色创建 API...')
+    
+    // 获取角色名称（用户输入或默认值）
+    const characterName = clipData.characterName || '角色创建1'
+    
+    // 构建请求体 - 使用角色名称作为 prompt
+    const requestBody = {
+      timestamps: clipData.timestamps,
+      prompt: characterName
+    }
+    
+    // 优先使用任务 ID，否则使用视频 URL
+    if (useTaskId && soraTaskId) {
+      requestBody.character = soraTaskId // 使用任务 ID 作为 character 参数
+      console.log('[VideoNode] 使用 Sora 任务 ID 创建角色:', soraTaskId, '名称:', characterName)
+    } else {
+      requestBody.videoUrl = qiniuVideoUrl
+      console.log('[VideoNode] 使用上传的视频 URL 创建角色:', qiniuVideoUrl, '名称:', characterName)
+    }
+    
+    const createResponse = await fetch('/api/sora/characters/create', {
+      method: 'POST',
+      headers: {
+        ...getTenantHeaders(),
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(requestBody)
+    })
+    
+    if (!createResponse.ok) {
+      const errorData = await createResponse.json()
+      throw new Error(errorData.message || '角色创建失败')
+    }
+    
+    const createResult = await createResponse.json()
+    console.log('[VideoNode] 角色创建结果:', createResult)
+    
+    // 4. 在右侧创建新的视频节点显示裁剪片段
+    const characterId = createResult.id || createResult.character_id
+    // 使用裁剪后的视频 URL（如果裁剪成功），否则使用原始 URL
+    const displayVideoUrl = updatedClipData.clippedVideoUrl || qiniuVideoUrl || clipData.videoUrl
+    createCharacterOutputNode(characterId, displayVideoUrl, updatedClipData, createResult)
+    
+    // 5. 显示创建中提示
+    showToast('Sora角色创建中，预计需要1-3分钟...', 'info', 5000)
+    
+    // 6. 延迟后开始轮询（角色训练需要时间，立即查询会失败）
+    setTimeout(() => {
+      pollCharacterStatus(characterId, displayVideoUrl, clipData)
+    }, 8000) // 等待8秒后再开始轮询
+    
+  } catch (error) {
+    console.error('[VideoNode] 角色创建失败:', error)
+    // 显示错误 Toast 通知
+    showToast(error.message || '角色创建失败', 'error', 3000)
+  }
+}
+
+// 创建角色输出节点
+function createCharacterOutputNode(characterId, videoUrl, clipData, apiResult) {
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const newNodePosition = {
+    x: currentNode.position.x + (props.data.width || 420) + 100,
+    y: currentNode.position.y
+  }
+  
+  // 解析裁剪时间
+  const [startTime, endTime] = (clipData.timestamps || '0,3').split(',').map(Number)
+  
+  // 使用传入的视频 URL（已经是裁剪后的视频或带 #t= 的 URL）
+  const clippedVideoUrl = clipData.clippedVideoUrl || videoUrl
+  
+  // 获取角色名称
+  const characterName = clipData.characterName || '角色创建1'
+  
+  // 创建新的视频节点，显示裁剪后的视频片段
+  // 节点标题使用角色名称
+  canvasStore.addNode({
+    id: newNodeId,
+    type: 'video',
+    position: newNodePosition,
+    data: {
+      label: characterName, // 使用角色名称作为标签
+      title: characterName, // 使用角色名称作为标题
+      status: 'success',
+      output: {
+        type: 'video',
+        url: clippedVideoUrl // 使用裁剪后的视频 URL
+      },
+      characterId: characterId,
+      characterName: characterName, // 保存角色名称
+      characterData: apiResult,
+      clipTimestamps: clipData.timestamps,
+      clipStartTime: startTime,
+      clipEndTime: endTime,
+      originalVideoUrl: videoUrl, // 保存原始视频 URL
+      isCharacterNode: true
+    }
+  })
+  
+  // 创建连接边
+  canvasStore.addEdge({
+    id: `edge_${props.id}_${newNodeId}`,
+    source: props.id,
+    target: newNodeId,
+    sourceHandle: 'output',
+    targetHandle: 'input'
+  })
+  
+  console.log('[VideoNode] 创建角色输出节点:', newNodeId)
+}
+
+// 轮询查询角色状态
+async function pollCharacterStatus(characterId, displayVideoUrl, clipData) {
+  const token = localStorage.getItem('token')
+  const maxAttempts = 36 // 最多轮询36次
+  const pollInterval = 10000 // 每10秒查询一次（总共约6分钟）
+  let consecutiveErrors = 0
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await fetch(`/api/sora/characters/${characterId}`, {
+        method: 'GET',
+        headers: {
+          ...getTenantHeaders(),
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      })
+      
+      if (!response.ok) {
+        consecutiveErrors++
+        // 连续3次错误才报告，避免偶发网络问题
+        if (consecutiveErrors >= 3) {
+          console.warn('[VideoNode] 查询角色状态连续失败', consecutiveErrors, '次')
+        }
+        await new Promise(resolve => setTimeout(resolve, pollInterval))
+        continue
+      }
+      
+      consecutiveErrors = 0 // 重置错误计数
+      const result = await response.json()
+      
+      if (result.status === 'completed') {
+        // 角色创建完成，添加到资产库（传递裁剪信息）
+        await addCharacterToAssets(characterId, displayVideoUrl, result, clipData)
+        showToast('Sora角色已创建成功，请前往资产库查看', 'success', 3000)
+        return
+      } else if (result.status === 'failed') {
+        showToast('角色创建失败: ' + (result.error || '未知错误'), 'error', 3000)
+        return
+      }
+      
+      // 状态为 queued 或 processing，继续等待
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+    } catch (error) {
+      console.error('[VideoNode] 轮询出错:', error.message)
+      consecutiveErrors++
+      await new Promise(resolve => setTimeout(resolve, pollInterval))
+    }
+  }
+  
+  // 超时 - 但角色可能仍在创建中
+  showToast('角色创建超时，请稍后在资产库查看', 'warning', 3000)
+}
+
+// 添加角色到资产库
+async function addCharacterToAssets(characterId, videoUrl, apiResult, clipData) {
+  try {
+    const token = localStorage.getItem('token')
+    
+    // 角色名称：优先使用用户输入的名称，其次使用 API 返回的 name
+    const characterName = clipData?.characterName || apiResult.name || '角色创建1'
+    // 角色 ID (username)：优先使用 API 返回的 username，其次使用 characterId
+    const characterUsername = apiResult.username || characterId
+    const avatarUrl = apiResult.avatar_url || videoUrl
+    
+    console.log('[VideoNode] 保存角色到资产库:', {
+      characterName,
+      characterUsername,
+      apiResultName: apiResult.name,
+      apiResultUsername: apiResult.username
+    })
+    
+    // 解析裁剪时间信息
+    const [clipStartTime, clipEndTime] = (clipData?.timestamps || '0,3').split(',').map(Number)
+    // 使用已经裁剪好的视频 URL（如果存在）
+    const clippedVideoUrl = clipData?.clippedVideoUrl || `${videoUrl}#t=${clipStartTime},${clipEndTime}`
+    
+    const response = await fetch('/api/canvas/assets', {
+      method: 'POST',
+      headers: {
+        ...getTenantHeaders(),
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        type: 'sora-character',
+        name: characterName, // 角色名称（可编辑）
+        url: clippedVideoUrl, // 使用裁剪后的视频 URL
+        thumbnail_url: avatarUrl, // 缩略图使用 avatar
+        metadata: {
+          characterId: characterId, // 角色ID（不可编辑）
+          name: characterName, // 角色名称（可编辑）
+          username: characterUsername, // 角色ID/用户名（不可编辑）
+          avatar_url: avatarUrl,
+          video_url: apiResult.video_url || videoUrl,
+          clipped_video_url: clippedVideoUrl, // 裁剪后的视频 URL
+          original_video_url: videoUrl, // 原始视频 URL
+          clip_start_time: clipStartTime, // 裁剪起始时间
+          clip_end_time: clipEndTime, // 裁剪结束时间
+          clip_timestamps: clipData?.timestamps, // 裁剪时间戳
+          cameo_id: apiResult.cameo_id || null,
+          sora_character_id: apiResult.sora_character_id || null,
+          model: apiResult.model || 'character-training',
+          status: apiResult.status || 'completed',
+          instruction_set_hint: apiResult.instruction_set_hint || '',
+          created_at: apiResult.created_at || Date.now(),
+          completed_at: apiResult.completed_at || Date.now()
+        }
+      })
+    })
+    
+    if (response.ok) {
+      console.log('[VideoNode] 角色已添加到资产库:', { 
+        characterName, 
+        characterUsername, 
+        avatarUrl,
+        clippedVideoUrl,
+        clipStartTime,
+        clipEndTime
+      })
+      // 通知资产面板刷新
+      window.dispatchEvent(new CustomEvent('assets-updated'))
+    }
+  } catch (error) {
+    console.error('[VideoNode] 添加资产失败:', error)
+  }
+}
+
+function handleToolbarDownload() {
+  if (!normalizedVideoUrl.value) return
+  
+  const link = document.createElement('a')
+  link.href = normalizedVideoUrl.value
+  link.download = `video_${props.id || Date.now()}.mp4`
+  link.target = '_blank'
+  
+  // 如果是跨域视频，直接打开新窗口
+  if (normalizedVideoUrl.value.startsWith('http') && !normalizedVideoUrl.value.startsWith(window.location.origin)) {
+    window.open(normalizedVideoUrl.value, '_blank')
+  } else {
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+}
+
+function handleToolbarPreview() {
+  if (!normalizedVideoUrl.value) return
+  openFullscreenPreview()
+}
 </script>
 
 <template>
   <div :class="nodeClass" @contextmenu="handleContextMenu">
+    <!-- 视频工具栏（选中且有视频时显示）- 与 ImageNode 保持一致 -->
+    <div v-if="showToolbar" class="video-toolbar">
+      <button class="toolbar-btn" title="高清" @mousedown.prevent="handleToolbarHD">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="12" y="15" text-anchor="middle" font-size="8" font-weight="bold" fill="currentColor" stroke="none">HD</text>
+        </svg>
+        <span>高清</span>
+      </button>
+      <button class="toolbar-btn" title="解析" @mousedown.prevent="handleToolbarAnalyze">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="14" y="3" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="3" y="14" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="14" y="14" width="7" height="7" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>解析</span>
+      </button>
+      <button class="toolbar-btn" title="角色创建" @mousedown.prevent="handleToolbarCreateCharacter">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="8" r="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M16 3l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>角色创建</span>
+      </button>
+      <div class="toolbar-divider"></div>
+      <button class="toolbar-btn icon-only" title="下载" @mousedown.prevent="handleToolbarDownload">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="toolbar-btn icon-only" title="全屏预览" @mousedown.prevent="handleToolbarPreview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+    
     <!-- 节点标签 -->
     <div 
       v-if="!isEditingLabel" 
@@ -1909,11 +2430,16 @@ function closeFullscreenPreview() {
             :src="normalizedVideoUrl" 
             preload="auto"
             muted
-            loop
+            :loop="!data?.isCharacterNode"
             class="video-player-output"
             playsinline
+            webkit-playsinline
+            x5-video-player-type="h5"
+            x5-playsinline
+            crossorigin="anonymous"
             @loadedmetadata="handleVideoLoaded"
             @canplay="handleVideoCanPlay"
+            @timeupdate="handleVideoTimeUpdate"
             @error="handleVideoError"
           ></video>
           <!-- 播放指示器已移除：首帧不显示播放按钮 -->
@@ -2037,6 +2563,9 @@ function closeFullscreenPreview() {
             :src="normalizedVideoUrl" 
             controls 
             autoplay
+            playsinline
+            webkit-playsinline
+            crossorigin="anonymous"
             class="fullscreen-video"
           ></video>
           <button class="fullscreen-close-btn" @click="closeFullscreenPreview">
@@ -2045,6 +2574,15 @@ function closeFullscreenPreview() {
         </div>
       </div>
     </Teleport>
+    
+    <!-- 视频裁剪编辑器（角色创建） -->
+    <VideoClipEditor
+      v-if="showClipEditor"
+      :video-url="normalizedVideoUrl"
+      :node-id="id"
+      @close="closeClipEditor"
+      @confirm="handleConfirmCreateCharacter"
+    />
     
     <!-- 底部配置面板（选中时显示） -->
     <div v-if="selected" class="config-panel" @mousedown.stop>
@@ -2236,6 +2774,7 @@ function closeFullscreenPreview() {
   border-radius: 4px;
   transition: all 0.2s ease;
   user-select: none;
+  white-space: pre-line; /* 支持多行标签 */
 }
 
 .node-label:hover {
@@ -2471,6 +3010,60 @@ function closeFullscreenPreview() {
   color: var(--canvas-accent-primary, #3b82f6);
 }
 
+/* ========== 视频工具栏（与 ImageNode 的 image-toolbar 保持一致） ========== */
+.video-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 20px;
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.video-toolbar .toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: #888;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.video-toolbar .toolbar-btn:hover {
+  background: #3a3a3a;
+  color: #fff;
+}
+
+.video-toolbar .toolbar-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.video-toolbar .toolbar-btn.icon-only {
+  padding: 6px;
+}
+
+.video-toolbar .toolbar-btn.icon-only span {
+  display: none;
+}
+
+.video-toolbar .toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: #3a3a3a;
+  margin: 0 6px;
+}
+
 /* ========== 视频输出预览（无边框设计，悬停自动播放） ========== */
 .video-output-wrapper {
   position: relative;
@@ -2499,6 +3092,11 @@ function closeFullscreenPreview() {
   display: block;
   background: #000;
   border-radius: 12px;
+  /* 跨浏览器兼容 */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 /* 播放指示器已移除 */
@@ -3476,4 +4074,5 @@ function closeFullscreenPreview() {
   background: rgba(255, 255, 255, 0.2);
   transform: scale(1.1);
 }
+
 </style>

@@ -36,6 +36,7 @@ import VideoGenNode from './nodes/VideoGenNode.vue'
 import LLMNode from './nodes/LLMNode.vue'
 import PreviewNode from './nodes/PreviewNode.vue'
 import GroupNode from './nodes/GroupNode.vue'
+import CharacterCardNode from './nodes/CharacterCardNode.vue'
 
 const emit = defineEmits(['dblclick', 'canvas-contextmenu', 'pane-click'])
 const canvasStore = useCanvasStore()
@@ -178,7 +179,8 @@ const nodeTypes = {
   'llm-content-expand': LLMNode,
   'preview-output': PreviewNode,
   'grid-preview': ImageNode,      // 9宫格分镜（使用 ImageNode，可以生成和输出图片）
-  'group': GroupNode              // 编组节点
+  'group': GroupNode,             // 编组节点
+  'character-card': CharacterCardNode  // Sora角色卡节点
 }
 
 // 记录连线起始信息
@@ -1264,6 +1266,30 @@ async function handleFileDrop(event) {
                 },
                 fromAsset: true,
                 assetId: asset.id
+              }
+            })
+            break
+          case 'sora-character':
+            // Sora 角色卡节点 - 显示角色名称和 ID
+            const characterName = asset.name || '角色'
+            const characterUsername = asset.metadata?.username || ''
+            canvasStore.addNode({
+              id: nodeId,
+              type: 'video',
+              position: { x: canvasX, y: canvasY },
+              data: {
+                title: characterName,
+                label: `${characterName}\n@${characterUsername}`,
+                status: 'success',
+                output: {
+                  type: 'video',
+                  url: asset.url
+                },
+                fromAsset: true,
+                assetId: asset.id,
+                isSoraCharacter: true,
+                characterName: characterName,
+                characterUsername: characterUsername
               }
             })
             break

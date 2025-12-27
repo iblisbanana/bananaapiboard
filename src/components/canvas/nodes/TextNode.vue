@@ -8,6 +8,7 @@ import { ref, computed, watch, nextTick, inject, onMounted } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
 import { getLLMConfig, chatWithLLM } from '@/api/canvas/llm'
+import { getAssets } from '@/api/canvas/assets'
 import { getApiUrl, getTenantHeaders } from '@/config/tenant'
 import { useI18n } from '@/i18n'
 
@@ -31,10 +32,161 @@ const localText = ref(props.data.text || '')
 // 节点状态：'empty' | 'ready' | 'editing'
 const nodeState = ref(localText.value ? 'ready' : 'empty')
 
+// 角色提及相关
+const characters = ref([])
+const showMentionList = ref(false)
+const mentionListPosition = ref({ top: 0, left: 0 })
+const mentionQuery = ref('')
+const activeMentionIndex = ref(0)
+const mentionTarget = ref(null) // 'editor' | 'llm'
+let mentionRange = null // 用于 contenteditable
+let mentionStartPos = 0 // 用于 textarea
+
+// 过滤后的角色
+const filteredCharacters = computed(() => {
+  const query = mentionQuery.value.toLowerCase()
+  // 如果没有输入查询词，显示所有（前10个）
+  // 如果输入了查询词，按名称或username过滤
+  return characters.value.filter(c => {
+    if (!query) return true
+    const name = c.name || ''
+    const username = c.metadata?.username || ''
+    return name.toLowerCase().includes(query) || username.toLowerCase().includes(query)
+  }).slice(0, 10)
+})
+
 // 标签编辑状态
 const isEditingLabel = ref(false)
 const labelInputRef = ref(null)
 const localLabel = ref(props.data.label || 'Text')
+
+// 加载角色列表
+async function loadCharacters() {
+  try {
+    const result = await getAssets({ type: 'sora-character', pageSize: 100 })
+    characters.value = result.assets || []
+  } catch (error) {
+    console.error('[TextNode] 加载角色失败:', error)
+  }
+}
+
+// 处理提及输入（ContentEditable）
+function handleEditorInput(event) {
+  handleInput(event) // 原有逻辑
+  
+  const selection = window.getSelection()
+  if (!selection.rangeCount) return
+  
+  const range = selection.getRangeAt(0)
+  const text = range.startContainer.textContent || ''
+  const cursorIndex = range.startOffset
+  
+  // 查找光标前的 @
+  const textBeforeCursor = text.slice(0, cursorIndex)
+  const atIndex = textBeforeCursor.lastIndexOf('@')
+  
+  if (atIndex !== -1) {
+    // 检查 @ 前面是否有空格或是否是行首
+    const charBeforeAt = atIndex > 0 ? textBeforeCursor[atIndex - 1] : ' '
+    if (/\s/.test(charBeforeAt)) {
+      const query = textBeforeCursor.slice(atIndex + 1)
+      // 如果包含空格，则不认为是提及（除非允许含空格的名字，这里假设名字不含空格或很短）
+      if (!/\s/.test(query) && query.length < 20) {
+        showMentionList.value = true
+        mentionQuery.value = query
+        mentionTarget.value = 'editor'
+        mentionRange = range.cloneRange()
+        mentionRange.setStart(range.startContainer, atIndex)
+        mentionRange.setEnd(range.startContainer, cursorIndex)
+        
+        // 计算位置
+        const rect = range.getBoundingClientRect()
+        // 获取编辑器容器的位置
+        const containerRect = textareaRef.value?.getBoundingClientRect() || { top: 0, left: 0 }
+        
+        // 相对位置，或者 fixed 位置
+        // 这里使用 fixed 定位提到 body
+        mentionListPosition.value = {
+          top: rect.bottom + 5,
+          left: rect.left
+        }
+        return
+      }
+    }
+  }
+  
+  showMentionList.value = false
+}
+
+// 处理提及输入（Textarea）
+function handleLLMInput(event) {
+  const el = event.target
+  const cursorIndex = el.selectionStart
+  const text = el.value
+  const textBeforeCursor = text.slice(0, cursorIndex)
+  const atIndex = textBeforeCursor.lastIndexOf('@')
+  
+  if (atIndex !== -1) {
+    const charBeforeAt = atIndex > 0 ? textBeforeCursor[atIndex - 1] : ' '
+    if (/\s/.test(charBeforeAt)) {
+      const query = textBeforeCursor.slice(atIndex + 1)
+      if (!/\s/.test(query) && query.length < 20) {
+        showMentionList.value = true
+        mentionQuery.value = query
+        mentionTarget.value = 'llm'
+        mentionStartPos = atIndex
+        
+        // 计算 Textarea 光标位置（简化处理，可能不精确）
+        // 对于 textarea，精确获取光标像素位置比较复杂，这里简化为跟随 textarea 底部或固定位置
+        // 更好的方式是使用辅助 div 模拟
+        const rect = el.getBoundingClientRect()
+        mentionListPosition.value = {
+          top: rect.bottom + 5,
+          left: rect.left + 20 // 简化的左侧偏移
+        }
+        return
+      }
+    }
+  }
+  
+  showMentionList.value = false
+}
+
+// 选择角色
+function selectCharacter(character) {
+  const username = character.metadata?.username || character.name || 'unknown'
+  const textToInsert = `@${username} ` // 插入 @username 加一个空格
+  
+  if (mentionTarget.value === 'editor') {
+    // ContentEditable 插入
+    const selection = window.getSelection()
+    if (mentionRange) {
+      selection.removeAllRanges()
+      selection.addRange(mentionRange)
+      document.execCommand('insertText', false, textToInsert)
+      // 更新本地状态
+      localText.value = textareaRef.value.innerHTML
+    }
+  } else if (mentionTarget.value === 'llm') {
+    // Textarea 插入
+    const originalText = llmInputText.value
+    const before = originalText.slice(0, mentionStartPos)
+    const after = originalText.slice(mentionStartPos + mentionQuery.value.length + 1)
+    llmInputText.value = before + textToInsert + after
+    
+    // 恢复光标位置
+    nextTick(() => {
+      if (llmInputRef.value) {
+        llmInputRef.value.focus()
+        const newCursorPos = mentionStartPos + textToInsert.length
+        llmInputRef.value.setSelectionRange(newCursorPos, newCursorPos)
+      }
+    })
+  }
+  
+  showMentionList.value = false
+  mentionQuery.value = ''
+}
 
 // 编辑模式
 const isEditing = ref(false)
@@ -549,24 +701,55 @@ async function uploadImagesToQiniu(imageUrls) {
 
 // 键盘快捷键
 function handleLLMKeyDown(event) {
+  // 如果提及列表是打开的，处理导航
+  if (showMentionList.value) {
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      activeMentionIndex.value = Math.max(0, activeMentionIndex.value - 1)
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      activeMentionIndex.value = Math.min(filteredCharacters.value.length - 1, activeMentionIndex.value + 1)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (filteredCharacters.value[activeMentionIndex.value]) {
+        selectCharacter(filteredCharacters.value[activeMentionIndex.value])
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      showMentionList.value = false
+      return
+    }
+  }
+
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     handleLLMGenerate()
   }
 }
 
-// 初始化加载 LLM 配置
-onMounted(() => {
-  loadLLMConfig()
-  
-  // 如果节点数据中指定了预设，自动选择该预设
-  if (props.data.selectedPreset) {
-    selectedPreset.value = props.data.selectedPreset
-    console.log('[TextNode] 自动选择预设:', props.data.selectedPreset)
-  }
-})
+// 格式化输入，高亮 username
+function formatText(text) {
+  if (!text) return ''
+  // 将 @username 替换为高亮 span
+  // 这里需要注意，username 可能包含下划线、点等，但不包含空格
+  return text.replace(/(@[a-zA-Z0-9_\.]+)/g, '<span class="mention-highlight">$1</span>')
+}
 
-// 节点样式类
+// 同步本地状态到 store
+watch(localText, (newText) => {
+  // 移除高亮标签后再保存到 store
+  // const cleanText = newText.replace(/<span class="mention-highlight">(@[a-zA-Z0-9_\.]+)<\/span>/g, '$1')
+  // contenteditable 的 innerHTML 可能会包含很多样式标签，如果只高亮显示，保存时需要清理
+  // 但为了简单，这里我们保存带有 span 的 HTML，只要后端能处理或者前端显示时能正常渲染
+  // 如果后端需要纯文本，提取纯文本发送给后端
+  canvasStore.updateNodeData(props.id, { text: newText })
+})
 const nodeClass = computed(() => ({
   'text-node': true,
   'selected': props.selected,

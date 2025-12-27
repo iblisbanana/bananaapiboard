@@ -554,9 +554,6 @@ export const getAvailableImageModels = (mode = null) => {
 
 // 获取所有可用的视频模型列表（从配置中动态获取）
 export const getAvailableVideoModels = () => {
-  // 注意：getVideoModels 函数在当前版本未实现，直接使用 fallback 逻辑
-  // 如果将来需要支持新格式配置，可以在这里添加 getVideoModels 函数的实现
-
   const modelNames = getModelNames()
   const modelEnabled = getModelEnabled()
   const modelDescriptions = getModelDescriptions()
@@ -566,15 +563,79 @@ export const getAvailableVideoModels = () => {
   const descriptions = modelDescriptions?.video || {}
   const pricing = modelPricing?.video || {}
   
+  // 获取新格式的模型配置（包含 durations、supportedModes 等完整配置）
+  const videoModelsConfig = config.video_models || []
+  
   // 默认模型配置（包含积分配置和描述）- 使用黑白灰图标
+  // 新版 Sora2 整合模型：前端只显示 sora2/sora2-pro，后端自动调度渠道
   const defaultModelConfig = {
-    'sora-2': { label: 'Sora 2', icon: '◆', description: 'OpenAI 旗舰视频生成模型，支持长达 60s 的高清视频', hasDurationPricing: true, pointsCost: { '10': 20, '15': 30 } },
-    'sora-2-pro': { label: 'Sora 2 Pro', icon: '★', description: '专业版 Sora 模型，更高分辨率和细节表现', hasDurationPricing: true, pointsCost: { '10': 300, '15': 450, '25': 750 } },
-    'veo3.1-components': { label: 'VEO 3.1', icon: '▣', description: 'Google DeepMind 最新视频模型，生成速度快，效果逼真', hasDurationPricing: false, pointsCost: 100 },
-    'veo3.1': { label: 'VEO 3.1 标准', icon: '▢', description: '标准版 VEO 模型，适合日常创作', hasDurationPricing: false, pointsCost: 150 },
-    'veo3.1-pro': { label: 'VEO 3.1 Pro', icon: '◈', description: '专业版 VEO 模型，支持更复杂的场景和运镜', hasDurationPricing: false, pointsCost: 200 },
-    // Kling（可灵）图生视频模型 - 只保留一个 Pro 模式
-    'kling-v2-6-pro': { label: 'Kling 2.6 Pro (首尾帧)', icon: '✨', description: '可灵 v2.6 专业版，支持首帧和尾帧控制', hasDurationPricing: true, pointsCost: { '5': 24, '10': 48 }, isImageToVideo: true }
+    // ==================== 新版 Sora2 整合模型 ====================
+    'sora2': { 
+      label: 'Sora 2', 
+      icon: '◆', 
+      description: 'OpenAI Sora 视频生成模型，支持文生视频和图生视频', 
+      hasDurationPricing: true, 
+      pointsCost: { '10': 20, '15': 30 },
+      // 支持的时长选项
+      durations: ['10', '15'],
+      // 支持的方向选项
+      aspectRatios: [
+        { value: '16:9', label: '横屏 (16:9)' },
+        { value: '9:16', label: '竖屏 (9:16)' }
+      ],
+      // 支持的模式：t2v=文生视频, i2v=图生视频
+      supportedModes: { t2v: true, i2v: true, a2v: false }
+    },
+    'sora2-pro': { 
+      label: 'Sora 2 Pro', 
+      icon: '★', 
+      description: '专业版 Sora 模型，更高分辨率和细节表现，支持25秒长视频', 
+      hasDurationPricing: true, 
+      pointsCost: { '10': 300, '15': 450, '25': 750 },
+      // Pro 支持 25s
+      durations: ['10', '15', '25'],
+      aspectRatios: [
+        { value: '16:9', label: '横屏 (16:9)' },
+        { value: '9:16', label: '竖屏 (9:16)' }
+      ],
+      supportedModes: { t2v: true, i2v: true, a2v: false }
+    },
+    // ==================== 旧版 Sora 模型（保持兼容）====================
+    'sora-2': { 
+      label: 'Sora 2 (旧版)', 
+      icon: '◇', 
+      description: '旧版 Sora 模型，建议使用新版 Sora 2', 
+      hasDurationPricing: true, 
+      pointsCost: { '10': 20, '15': 30 },
+      durations: ['10', '15'],
+      aspectRatios: [{ value: '16:9', label: '横屏 (16:9)' }],
+      supportedModes: { t2v: true, i2v: true, a2v: false }
+    },
+    'sora-2-pro': { 
+      label: 'Sora 2 Pro (旧版)', 
+      icon: '☆', 
+      description: '旧版专业版 Sora 模型', 
+      hasDurationPricing: true, 
+      pointsCost: { '10': 300, '15': 450, '25': 750 },
+      durations: ['10', '15', '25'],
+      aspectRatios: [{ value: '16:9', label: '横屏 (16:9)' }],
+      supportedModes: { t2v: true, i2v: true, a2v: false }
+    },
+    // ==================== VEO3 系列 ====================
+    'veo3.1-components': { label: 'VEO 3.1', icon: '▣', description: 'Google DeepMind 最新视频模型，生成速度快，效果逼真', hasDurationPricing: false, pointsCost: 100, supportedModes: { t2v: true, i2v: true, a2v: false } },
+    'veo3.1': { label: 'VEO 3.1 标准', icon: '▢', description: '标准版 VEO 模型，适合日常创作', hasDurationPricing: false, pointsCost: 150, supportedModes: { t2v: true, i2v: true, a2v: false } },
+    'veo3.1-pro': { label: 'VEO 3.1 Pro', icon: '◈', description: '专业版 VEO 模型，支持更复杂的场景和运镜', hasDurationPricing: false, pointsCost: 200, supportedModes: { t2v: true, i2v: true, a2v: false } },
+    // ==================== Kling（可灵）图生视频模型 ====================
+    'kling-v2-6-pro': { 
+      label: 'Kling 2.6 Pro (首尾帧)', 
+      icon: '✨', 
+      description: '可灵 v2.6 专业版，支持首帧和尾帧控制', 
+      hasDurationPricing: true, 
+      pointsCost: { '5': 24, '10': 48 }, 
+      durations: ['5', '10'],
+      isImageToVideo: true,
+      supportedModes: { t2v: false, i2v: true, a2v: false }
+    }
   }
   
   // 转换为数组格式的默认模型列表
@@ -596,6 +657,32 @@ export const getAvailableVideoModels = () => {
       const modelPricingConfig = pricing[key] || {}
       const defaultConfig = defaultModelConfig[key] || {}
       
+      // 查找新格式配置（包含 durations、supportedModes、aspectRatios 等完整配置）
+      const modelFullConfig = videoModelsConfig.find(m => m.name === key || m.id === key) || {}
+      
+      // 计算时长选项（优先级：新格式配置 > pointsCost提取 > 默认配置）
+      let modelDurations = defaultConfig.durations || ['10', '15']
+      const hasDurPricing = modelPricingConfig.hasDurationPricing ?? defaultConfig.hasDurationPricing ?? false
+      const pCost = modelPricingConfig.pointsCost || defaultConfig.pointsCost || 1
+      
+      // 优先使用新格式配置中的 durations（租户后台直接配置的时长选项）
+      if (modelFullConfig.durations && Array.isArray(modelFullConfig.durations) && modelFullConfig.durations.length > 0) {
+        // 确保时长为字符串格式
+        modelDurations = modelFullConfig.durations.map(d => String(d))
+        console.log(`[tenant] 模型 ${key} 使用新格式配置的时长:`, modelDurations)
+      }
+      // 否则，如果租户配置了按时长计费且 pointsCost 是对象，从中提取时长选项
+      else if (hasDurPricing && typeof pCost === 'object' && pCost !== null) {
+        const durationsFromPricing = Object.keys(pCost).filter(k => k !== 'hd_extra').sort((a, b) => Number(a) - Number(b))
+        if (durationsFromPricing.length > 0) {
+          modelDurations = durationsFromPricing
+        }
+      }
+      
+      // 获取新格式配置中的 aspectRatios 和 supportedModes
+      const aspectRatios = modelFullConfig.aspectRatios || defaultConfig.aspectRatios || [{ value: '16:9', label: '横屏 (16:9)' }]
+      const supportedModes = modelFullConfig.supportedModes || defaultConfig.supportedModes || { t2v: true, i2v: true, a2v: false }
+      
       models.push({
         value: key,
         // 优先使用租户配置的名称，否则使用默认名称
@@ -604,8 +691,13 @@ export const getAvailableVideoModels = () => {
         // 只使用租户配置的描述，为空时不显示（与图像节点保持一致）
         description: descriptions[key] || '',
         // 积分配置：优先使用租户配置，否则使用默认配置
-        hasDurationPricing: modelPricingConfig.hasDurationPricing ?? defaultConfig.hasDurationPricing ?? false,
-        pointsCost: modelPricingConfig.pointsCost || defaultConfig.pointsCost || 1
+        hasDurationPricing: hasDurPricing,
+        pointsCost: pCost,
+        // 时长选项：优先使用新格式配置的 durations
+        durations: modelDurations,
+        aspectRatios,
+        supportedModes,
+        isImageToVideo: modelFullConfig.isImageToVideo ?? defaultConfig.isImageToVideo ?? false
       })
     }
   }

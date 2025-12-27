@@ -395,6 +395,17 @@ function handleAssetInsert(asset) {
         assetId: asset.id
       }
       break
+    case 'sora-character':
+      nodeType = 'character-card'
+      nodeData = {
+        title: asset.name || 'Sora角色',
+        name: asset.name || '未命名角色',
+        username: asset.metadata?.username || '',
+        avatar: asset.url || asset.thumbnail_url || '',
+        fromAsset: true,
+        assetId: asset.id
+      }
+      break
   }
   
   canvasStore.addNode({
@@ -457,7 +468,10 @@ function handleHistoryApply(historyItem) {
         fromHistory: true,
         historyId: historyItem.id,
         prompt: historyItem.prompt,
-        model: historyItem.model
+        model: historyItem.model,
+        // 传递 task_id 用于角色创建
+        taskId: historyItem.task_id,
+        soraTaskId: historyItem.task_id
       }
       break
     case 'audio':
