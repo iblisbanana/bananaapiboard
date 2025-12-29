@@ -276,9 +276,40 @@ function closeFullscreenPreview() {
   emit('close')
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载视频
 async function downloadVideo() {
   if (!videoUrl.value) return
+  
+  const filename = `video_${Date.now()}.mp4`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(videoUrl.value)) {
+    const a = document.createElement('a')
+    a.href = buildQiniuForceDownloadUrl(videoUrl.value, filename)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    emit('close')
+    return
+  }
   
   try {
     const response = await fetch(videoUrl.value, {
@@ -289,7 +320,7 @@ async function downloadVideo() {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `video_${Date.now()}.mp4`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -301,7 +332,7 @@ async function downloadVideo() {
     // 如果 fetch 失败，尝试直接下载（不打开新窗口）
     const a = document.createElement('a')
     a.href = videoUrl.value
-    a.download = `video_${Date.now()}.mp4`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -315,6 +346,20 @@ async function downloadVideo() {
 async function downloadImage() {
   if (!imageUrl.value) return
   
+  const filename = `image_${Date.now()}.png`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(imageUrl.value)) {
+    const a = document.createElement('a')
+    a.href = buildQiniuForceDownloadUrl(imageUrl.value, filename)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    emit('close')
+    return
+  }
+  
   try {
     const response = await fetch(imageUrl.value, {
       headers: getTenantHeaders()
@@ -324,7 +369,7 @@ async function downloadImage() {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `image_${Date.now()}.png`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -336,7 +381,7 @@ async function downloadImage() {
     // 如果 fetch 失败，尝试直接下载（不打开新窗口）
     const a = document.createElement('a')
     a.href = imageUrl.value
-    a.download = `image_${Date.now()}.png`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

@@ -341,12 +341,43 @@ function handleRegenerate() {
   })
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载视频
 async function downloadVideo() {
   if (!props.data.output?.url) return
   
+  const videoUrl = props.data.output.url
+  const filename = `video_${props.id || Date.now()}.mp4`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(videoUrl)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(videoUrl, filename)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return
+  }
+  
   try {
-    const response = await fetch(props.data.output.url, {
+    const response = await fetch(videoUrl, {
       headers: getTenantHeaders()
     })
     const blob = await response.blob()
@@ -354,7 +385,7 @@ async function downloadVideo() {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `video_${props.id || Date.now()}.mp4`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -362,8 +393,8 @@ async function downloadVideo() {
   } catch (error) {
     console.error('[VideoGenNode] 下载视频失败:', error)
     const link = document.createElement('a')
-    link.href = props.data.output.url
-    link.download = `video_${props.id || Date.now()}.mp4`
+    link.href = videoUrl
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

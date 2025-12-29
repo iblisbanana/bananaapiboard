@@ -1096,11 +1096,34 @@ function resetImageTransform() {
   imageTranslate.value = { x: 0, y: 0 }
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载图片
 function download(url, filename) {
   const link = document.createElement('a')
-  link.href = buildDownloadUrl(url, filename || 'image.png')
-  link.download = filename || 'image.png'
+  const fname = filename || 'image.png'
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(url)) {
+    link.href = buildQiniuForceDownloadUrl(url, fname)
+  } else {
+    link.href = buildDownloadUrl(url, fname)
+  }
+  link.download = fname
   link.click()
 }
 
@@ -1114,8 +1137,18 @@ function downloadHistoryImage(item) {
   const notePrefix = item.note ? item.note.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_').slice(0, 50) + '_' : ''
   const filename = `${notePrefix}${modelName}_${timestamp}.png`
   
-  // 如果 URL 是相对路径（/api/images/file/xxx），使用完整路径
   let downloadUrl = item.url
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(item.url)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(item.url, filename)
+    link.download = filename
+    link.click()
+    return
+  }
+  
+  // 如果 URL 是相对路径（/api/images/file/xxx），使用完整路径
   if (item.url.startsWith('/api/images/file/')) {
     const id = item.url.split('/').pop()
     downloadUrl = `/api/images/download/${id}?filename=${encodeURIComponent(filename)}`
@@ -1123,7 +1156,7 @@ function downloadHistoryImage(item) {
     // 其他相对路径，添加域名
     downloadUrl = window.location.origin + item.url
   } else {
-    // 外部 URL，使用代理下载
+    // 其他外部 URL，使用代理下载
     downloadUrl = buildDownloadUrl(item.url, filename)
   }
   

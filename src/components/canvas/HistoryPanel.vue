@@ -304,10 +304,40 @@ async function confirmDelete() {
   }
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载文件
 async function handleDownload(item) {
   if (!item.url) return
   closeContextMenu()
+  
+  const filename = item.name || `${item.type}_${item.id}`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(item.url)) {
+    const a = document.createElement('a')
+    a.href = buildQiniuForceDownloadUrl(item.url, filename)
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    return
+  }
   
   try {
     const response = await fetch(item.url, {
@@ -318,7 +348,7 @@ async function handleDownload(item) {
     const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = item.name || `${item.type}_${item.id}`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -327,7 +357,7 @@ async function handleDownload(item) {
     console.error('[HistoryPanel] 下载文件失败:', error)
     const a = document.createElement('a')
     a.href = item.url
-    a.download = item.name || `${item.type}_${item.id}`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

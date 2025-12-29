@@ -344,12 +344,43 @@ async function useTool(action) {
   await showAlert(`${action} 功能开发中...`, '提示')
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载图片
 async function downloadImage() {
   if (outputImages.value.length === 0) return
   
+  const imageUrl = outputImages.value[0]
+  const filename = `image_${props.id || Date.now()}.png`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(imageUrl)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(imageUrl, filename)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return
+  }
+  
   try {
-    const response = await fetch(outputImages.value[0], {
+    const response = await fetch(imageUrl, {
       headers: getTenantHeaders()
     })
     const blob = await response.blob()
@@ -357,7 +388,7 @@ async function downloadImage() {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `image_${props.id || Date.now()}.png`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -365,8 +396,8 @@ async function downloadImage() {
   } catch (error) {
     console.error('[ImageGenNode] 下载图片失败:', error)
     const link = document.createElement('a')
-    link.href = outputImages.value[0]
-    link.download = `image_${props.id || Date.now()}.png`
+    link.href = imageUrl
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

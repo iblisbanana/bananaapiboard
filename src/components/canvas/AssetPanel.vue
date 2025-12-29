@@ -349,6 +349,23 @@ function handleAddToCanvas() {
   }
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 右键菜单 - 下载资产
 async function handleDownload() {
   if (!contextMenuAsset.value) return
@@ -374,9 +391,13 @@ async function handleDownload() {
     
     // 创建下载链接
     const link = document.createElement('a')
-    link.href = downloadUrl
+    // 如果是七牛云 URL，使用 attname 参数强制下载
+    if (isQiniuCdnUrl(downloadUrl)) {
+      link.href = buildQiniuForceDownloadUrl(downloadUrl, filename)
+    } else {
+      link.href = downloadUrl
+    }
     link.download = filename
-    link.target = '_blank'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

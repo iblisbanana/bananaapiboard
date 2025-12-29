@@ -83,7 +83,22 @@ export async function uploadImages(files) {
   return j.urls || []
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
 export function buildDownloadUrl(url, filename) {
+  // 如果是七牛云 URL，直接返回原始 URL（永久有效链接，不需要代理）
+  if (isQiniuCdnUrl(url)) {
+    return url
+  }
+  
   if (url && url.startsWith('/api/images/file/')) {
     const id = url.split('/').pop()
     const q = filename ? `?filename=${encodeURIComponent(filename)}` : ''

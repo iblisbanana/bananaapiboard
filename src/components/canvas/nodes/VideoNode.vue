@@ -1995,48 +1995,96 @@ async function executeCharacterCreation(clipData) {
       clippedVideoUrl: clippedVideoUrl
     }
     
-    // 检查是否有 Sora 生成的任务 ID（优先使用）
+    // 获取用户选择的创建模式（sora 或 url）
+    const createMode = clipData.createMode || 'url'
     const soraTaskId = props.data?.soraTaskId || props.data?.taskId
     let qiniuVideoUrl = null
     let useTaskId = false
     
-    if (soraTaskId) {
-      console.log('[VideoNode] 检测到 Sora 任务 ID，优先使用:', soraTaskId)
+    // 根据用户选择的创建模式决定使用哪种方式
+    if (createMode === 'sora' && soraTaskId) {
+      // 用户选择 Sora 模式且有任务ID
+      console.log('[VideoNode] 用户选择 Sora 模式，使用任务 ID:', soraTaskId)
       useTaskId = true
       // 使用裁剪后的视频 URL
       qiniuVideoUrl = clippedVideoUrl
     } else {
-      // 没有任务 ID，需要上传视频到七牛云
-      console.log('[VideoNode] 没有任务 ID，需要上传视频到七牛云...')
+      // 用户选择 URL 模式，或没有任务ID时强制使用 URL 模式
+      console.log('[VideoNode] 使用 URL 模式，需要上传视频到七牛云...')
       
-      // 1. 先将视频上传到七牛云（如果是本地 URL）
-      let videoUrlForApi = clipData.videoUrl
-      if (clipData.videoUrl.startsWith('/api/')) {
-        // 本地视频，需要先获取完整 URL
-        videoUrlForApi = getApiUrl(clipData.videoUrl)
-      }
+      // 检查是否是本地视频（通过拖放上传的 Object URL 或 base64）
+      const isLocalVideo = props.data?.isLocalVideo || 
+                           clipData.videoUrl.startsWith('blob:') || 
+                           clipData.videoUrl.startsWith('data:')
       
-      // 2. 上传视频到七牛云获取公开 URL
-      const uploadResponse = await fetch('/api/videos/upload-to-qiniu', {
-        method: 'POST',
-        headers: {
-          ...getTenantHeaders(),
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          videoUrl: videoUrlForApi
+      if (isLocalVideo) {
+        // 本地视频需要先上传到服务器
+        console.log('[VideoNode] 检测到本地视频，准备上传...')
+        
+        let fileToUpload = props.data?.localFile
+        
+        // 如果没有 localFile 但有 blob URL，需要先 fetch 获取 blob
+        if (!fileToUpload && clipData.videoUrl.startsWith('blob:')) {
+          console.log('[VideoNode] 从 blob URL 获取视频数据...')
+          const response = await fetch(clipData.videoUrl)
+          const blob = await response.blob()
+          fileToUpload = new File([blob], 'video.mp4', { type: blob.type || 'video/mp4' })
+        }
+        
+        if (!fileToUpload) {
+          throw new Error('无法获取本地视频文件')
+        }
+        
+        const formData = new FormData()
+        formData.append('file', fileToUpload)
+        
+        const uploadResponse = await fetch('/api/videos/upload', {
+          method: 'POST',
+          headers: {
+            ...getTenantHeaders(),
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: formData
         })
-      })
-      
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json()
-        throw new Error(errorData.message || '视频上传失败')
+        
+        if (!uploadResponse.ok) {
+          const errorData = await uploadResponse.json().catch(() => ({}))
+          throw new Error(errorData.message || '本地视频上传失败')
+        }
+        
+        const uploadResult = await uploadResponse.json()
+        qiniuVideoUrl = uploadResult.url
+        console.log('[VideoNode] 本地视频上传成功:', qiniuVideoUrl)
+      } else {
+        // 远程 URL，通过 API 上传到七牛云
+        let videoUrlForApi = clipData.videoUrl
+        if (clipData.videoUrl.startsWith('/api/')) {
+          // 相对路径，需要先获取完整 URL
+          videoUrlForApi = getApiUrl(clipData.videoUrl)
+        }
+        
+        // 上传视频到七牛云获取公开 URL
+        const uploadResponse = await fetch('/api/videos/upload-to-qiniu', {
+          method: 'POST',
+          headers: {
+            ...getTenantHeaders(),
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            videoUrl: videoUrlForApi
+          })
+        })
+        
+        if (!uploadResponse.ok) {
+          const errorData = await uploadResponse.json()
+          throw new Error(errorData.message || '视频上传失败')
+        }
+        
+        const uploadResult = await uploadResponse.json()
+        qiniuVideoUrl = uploadResult.url
+        console.log('[VideoNode] 视频上传成功:', qiniuVideoUrl)
       }
-      
-      const uploadResult = await uploadResponse.json()
-      qiniuVideoUrl = uploadResult.url
-      console.log('[VideoNode] 视频上传成功:', qiniuVideoUrl)
     }
     
     // 3. 调用角色创建 API
@@ -2287,8 +2335,28 @@ async function addCharacterToAssets(characterId, videoUrl, apiResult, clipData) 
   }
 }
 
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 async function handleToolbarDownload() {
   if (!normalizedVideoUrl.value) return
+  
+  const filename = `video_${props.id || Date.now()}.mp4`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(normalizedVideoUrl.value)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(normalizedVideoUrl.value, filename)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return
+  }
   
   try {
     // 使用 fetch 获取视频 blob，支持跨域下载
@@ -2301,7 +2369,7 @@ async function handleToolbarDownload() {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `video_${props.id || Date.now()}.mp4`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -2311,7 +2379,7 @@ async function handleToolbarDownload() {
     // 如果 fetch 失败，尝试直接下载
     const link = document.createElement('a')
     link.href = normalizedVideoUrl.value
-    link.download = `video_${props.id || Date.now()}.mp4`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -2615,6 +2683,7 @@ function handleToolbarPreview() {
       v-if="showClipEditor"
       :video-url="normalizedVideoUrl"
       :node-id="id"
+      :sora-task-id="props.data?.soraTaskId || props.data?.taskId || ''"
       @close="closeClipEditor"
       @confirm="handleConfirmCreateCharacter"
     />

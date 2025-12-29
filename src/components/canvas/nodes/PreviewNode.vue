@@ -43,6 +43,16 @@ function handleContextMenu(event) {
   )
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
 // 下载
 async function download() {
   let downloadUrl = ''
@@ -57,6 +67,24 @@ async function download() {
   }
   
   if (!downloadUrl) return
+  
+  // 构建七牛云强制下载URL（使用attname参数）
+  function buildQiniuForceDownloadUrl(url, filename) {
+    if (!url || !filename) return url
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}attname=${encodeURIComponent(filename)}`
+  }
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(downloadUrl)) {
+    const a = document.createElement('a')
+    a.href = buildQiniuForceDownloadUrl(downloadUrl, fileName)
+    a.download = fileName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    return
+  }
   
   try {
     const response = await fetch(downloadUrl, {

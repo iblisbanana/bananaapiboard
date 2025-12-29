@@ -218,10 +218,45 @@ function handleCrop() {
   })
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 // 下载 - 直接实现
 async function handleDownload() {
   console.log('[ImageToolbar] 下载', props.imageNode?.id)
   if (!imageUrl.value) return
+  
+  const filename = `image_${props.imageNode?.id || Date.now()}.png`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(imageUrl.value)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(imageUrl.value, filename)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    
+    emit('download', { 
+      nodeId: props.imageNode?.id, 
+      imageUrl: imageUrl.value 
+    })
+    return
+  }
   
   try {
     // 使用 fetch 获取图片 blob，支持跨域下载
@@ -234,7 +269,7 @@ async function handleDownload() {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `image_${props.imageNode?.id || Date.now()}.png`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -244,7 +279,7 @@ async function handleDownload() {
     // 如果 fetch 失败，尝试直接下载
     const link = document.createElement('a')
     link.href = imageUrl.value
-    link.download = `image_${props.imageNode?.id || Date.now()}.png`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

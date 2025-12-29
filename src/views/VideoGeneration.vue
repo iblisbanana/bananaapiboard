@@ -641,15 +641,45 @@ async function deleteHistory(item) {
   }
 }
 
+// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
+function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 async function downloadVideo(item) {
   if (!item?.video_url) return
   try {
-    const token = localStorage.getItem('token')
     // 如果有备注，将备注添加到文件名开头（移除特殊字符）
     const notePrefix = item.note ? item.note.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_').slice(0, 30) + '_' : ''
     const promptPart = (item.prompt || 'video').slice(0, 20).replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_')
-    const filename = encodeURIComponent(`${notePrefix}${promptPart}`)
-    const response = await fetch(`/api/videos/download?url=${encodeURIComponent(item.video_url)}&name=${filename}.mp4`, {
+    const filename = `${notePrefix}${promptPart}`
+    
+    // 如果是七牛云 URL，使用 attname 参数强制下载
+    if (isQiniuCdnUrl(item.video_url)) {
+      const a = document.createElement('a')
+      a.href = buildQiniuForceDownloadUrl(item.video_url, `${filename}.mp4`)
+      a.download = `${filename}.mp4`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      return
+    }
+    
+    const token = localStorage.getItem('token')
+    const encodedFilename = encodeURIComponent(filename)
+    const response = await fetch(`/api/videos/download?url=${encodeURIComponent(item.video_url)}&name=${encodedFilename}.mp4`, {
       headers: { ...getTenantHeaders(), ...(token ? { Authorization: `Bearer ${token}` } : {}) }
     })
     if (!response.ok) throw new Error('下载失败')

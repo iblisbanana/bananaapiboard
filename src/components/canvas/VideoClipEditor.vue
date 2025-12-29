@@ -18,14 +18,18 @@ const characterPointsCost = computed(() => {
 })
 
 const props = defineProps({
-  // 视频URL
+  // 视频URL（必须传入）
   videoUrl: {
     type: String,
-    required: false, // 改为可选，允许用户输入URL
-    default: ''
+    required: true
   },
   // 节点ID
   nodeId: {
+    type: String,
+    default: ''
+  },
+  // Sora 任务ID（可选，用于判断是否可以使用 Sora 模式）
+  soraTaskId: {
     type: String,
     default: ''
   }
@@ -51,22 +55,12 @@ const MAX_CLIP_DURATION = 3 // 最长3秒
 // 角色名称
 const characterName = ref('')
 
-// 视频源模式：'node'（从节点） 或 'url'（从URL输入）
-const sourceMode = ref(props.videoUrl ? 'node' : 'url')
+// 创建模式：'sora'（使用任务ID）或 'url'（使用URL上传）
+// 如果有 soraTaskId 则默认使用 sora 模式，否则只能使用 url 模式
+const createMode = ref(props.soraTaskId ? 'sora' : 'url')
 
-// 用户输入的视频URL
-const inputVideoUrl = ref('')
-
-// 当前使用的视频URL
-const currentVideoUrl = computed(() => {
-  if (sourceMode.value === 'url') {
-    return inputVideoUrl.value
-  }
-  return props.videoUrl
-})
-
-// URL输入错误提示
-const urlError = ref('')
+// 是否可以使用 Sora 模式（需要有任务ID）
+const canUseSoraMode = computed(() => !!props.soraTaskId)
 
 // 拖拽状态
 const isDraggingStart = ref(false)
@@ -96,7 +90,6 @@ function handleVideoLoaded() {
   if (videoRef.value) {
     videoDuration.value = videoRef.value.duration
     isLoaded.value = true
-    urlError.value = '' // 清除错误提示
 
     // 初始化裁剪范围（默认前3秒或视频长度）
     clipEnd.value = Math.min(3, videoDuration.value)
@@ -111,48 +104,6 @@ function handleVideoLoaded() {
 function handleVideoError(event) {
   console.error('[VideoClipEditor] 视频加载失败:', event)
   isLoaded.value = false
-  urlError.value = '视频加载失败，请检查URL是否正确'
-}
-
-// 切换视频源模式
-function switchSourceMode(mode) {
-  sourceMode.value = mode
-  isLoaded.value = false
-  urlError.value = ''
-
-  // 如果切换到URL模式且有输入URL，重置视频状态
-  if (mode === 'url' && inputVideoUrl.value) {
-    resetVideoState()
-  }
-}
-
-// 重置视频状态
-function resetVideoState() {
-  videoDuration.value = 0
-  currentTime.value = 0
-  isPlaying.value = false
-  clipStart.value = 0
-  clipEnd.value = 3
-  if (videoRef.value) {
-    videoRef.value.pause()
-  }
-}
-
-// 加载URL视频
-function loadUrlVideo() {
-  if (!inputVideoUrl.value.trim()) {
-    urlError.value = '请输入视频URL'
-    return
-  }
-
-  // 简单的URL验证
-  try {
-    new URL(inputVideoUrl.value)
-    urlError.value = ''
-    resetVideoState()
-  } catch (e) {
-    urlError.value = '请输入有效的URL'
-  }
 }
 
 // 视频时间更新
@@ -326,16 +277,13 @@ function handleConfirm() {
   // 角色名称：用户输入或默认值
   const name = characterName.value.trim() || '角色创建1'
 
-  // 使用当前的视频URL（可能来自节点或用户输入）
-  const videoUrl = currentVideoUrl.value
-
   emit('confirm', {
-    videoUrl: videoUrl,
+    videoUrl: props.videoUrl,
     timestamps: `${finalStart},${finalEnd}`,
     startTime: finalStart,
     endTime: finalEnd,
     characterName: name, // 传递角色名称
-    isFromUrl: sourceMode.value === 'url' // 标记是否来自URL输入
+    createMode: createMode.value // 传递创建模式：'sora' 或 'url'
   })
 }
 
@@ -409,64 +357,13 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- 视频源选择 -->
-        <div class="video-source-selector">
-          <div class="source-tabs">
-            <button
-              :class="['source-tab', { active: sourceMode === 'node' }]"
-              @click="switchSourceMode('node')"
-              v-if="videoUrl"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-              </svg>
-              从节点视频
-            </button>
-            <button
-              :class="['source-tab', { active: sourceMode === 'url' }]"
-              @click="switchSourceMode('url')"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-              </svg>
-              从URL导入
-            </button>
-          </div>
-
-          <!-- URL输入区域 -->
-          <div v-if="sourceMode === 'url'" class="url-input-area">
-            <div class="url-input-group">
-              <input
-                v-model="inputVideoUrl"
-                type="text"
-                class="url-input"
-                placeholder="请输入视频URL（支持HTTP/HTTPS，例如：https://example.com/video.mp4）"
-                @keyup.enter="loadUrlVideo"
-              />
-              <button class="load-btn" @click="loadUrlVideo">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                </svg>
-                加载视频
-              </button>
-            </div>
-            <p v-if="urlError" class="url-error">{{ urlError }}</p>
-            <p v-else class="url-hint">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-              支持从其他平台生成的视频或自行上传的视频URL
-            </p>
-          </div>
-        </div>
         
         <!-- 视频预览区域 -->
         <div class="video-preview-area">
           <video
-            v-if="currentVideoUrl"
             ref="videoRef"
-            :src="currentVideoUrl"
-            :key="currentVideoUrl"
+            :src="videoUrl"
+            :key="videoUrl"
             class="clip-video"
             @loadedmetadata="handleVideoLoaded"
             @timeupdate="handleTimeUpdate"
@@ -475,12 +372,6 @@ onUnmounted(() => {
             preload="auto"
             crossorigin="anonymous"
           ></video>
-          <div v-else class="video-placeholder">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-            </svg>
-            <p>请输入视频URL并加载</p>
-          </div>
           
           <!-- 播放按钮覆盖层 -->
           <div v-if="!isPlaying && isLoaded" class="play-overlay" @click="togglePlay">
@@ -543,6 +434,48 @@ onUnmounted(() => {
             <span>0:00</span>
             <span>{{ formatTime(videoDuration / 2) }}</span>
             <span>{{ formatTime(videoDuration) }}</span>
+          </div>
+        </div>
+        
+        <!-- 创建模式选择 -->
+        <div class="create-mode-section">
+          <label class="section-label">创建方式</label>
+          <div class="create-mode-options">
+            <label 
+              class="mode-option"
+              :class="{ active: createMode === 'sora', disabled: !canUseSoraMode }"
+            >
+              <input 
+                type="radio" 
+                v-model="createMode" 
+                value="sora"
+                :disabled="!canUseSoraMode"
+              />
+              <div class="mode-content">
+                <span class="mode-icon">⚡</span>
+                <div class="mode-info">
+                  <span class="mode-title">Sora 直连</span>
+                  <span class="mode-desc">{{ canUseSoraMode ? '使用原始任务ID，更快速' : '仅 Sora 生成的视频可用' }}</span>
+                </div>
+              </div>
+            </label>
+            <label 
+              class="mode-option"
+              :class="{ active: createMode === 'url' }"
+            >
+              <input 
+                type="radio" 
+                v-model="createMode" 
+                value="url"
+              />
+              <div class="mode-content">
+                <span class="mode-icon">🔗</span>
+                <div class="mode-info">
+                  <span class="mode-title">URL 上传</span>
+                  <span class="mode-desc">通过视频URL创建，适用所有视频</span>
+                </div>
+              </div>
+            </label>
           </div>
         </div>
         
@@ -688,139 +621,6 @@ onUnmounted(() => {
   height: 18px;
 }
 
-/* 视频源选择器 */
-.video-source-selector {
-  padding: 16px 24px;
-  border-bottom: 1px solid #2a2a2a;
-  background: #0f0f0f;
-  flex-shrink: 0;
-}
-
-.source-tabs {
-  display: flex;
-  gap: 8px;
-}
-
-.source-tab {
-  flex: 1;
-  padding: 10px 16px;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  color: #888;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition: all 0.2s ease;
-}
-
-.source-tab svg {
-  width: 18px;
-  height: 18px;
-}
-
-.source-tab:hover {
-  background: #222;
-  border-color: #3a3a3a;
-  color: #aaa;
-}
-
-.source-tab.active {
-  background: #FBBF24;
-  border-color: #FBBF24;
-  color: #000;
-}
-
-.source-tab.active:hover {
-  background: #FCD34D;
-  border-color: #FCD34D;
-}
-
-/* URL输入区域 */
-.url-input-area {
-  margin-top: 16px;
-}
-
-.url-input-group {
-  display: flex;
-  gap: 8px;
-}
-
-.url-input {
-  flex: 1;
-  padding: 10px 14px;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  color: #fff;
-  font-size: 14px;
-  transition: all 0.2s ease;
-}
-
-.url-input:focus {
-  outline: none;
-  border-color: #FBBF24;
-  background: #222;
-}
-
-.url-input::placeholder {
-  color: #666;
-}
-
-.load-btn {
-  padding: 10px 20px;
-  background: #FBBF24;
-  border: none;
-  border-radius: 8px;
-  color: #000;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  transition: all 0.2s ease;
-}
-
-.load-btn:hover {
-  background: #FCD34D;
-  transform: translateY(-1px);
-}
-
-.load-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.url-error {
-  margin: 8px 0 0 0;
-  font-size: 13px;
-  color: #EF4444;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.url-hint {
-  margin: 8px 0 0 0;
-  font-size: 13px;
-  color: #888;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.url-hint svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-
 /* 视频预览区域 */
 .video-preview-area {
   position: relative;
@@ -877,28 +677,6 @@ onUnmounted(() => {
   height: 28px;
   color: #1a1a1a;
   margin-left: 4px;
-}
-
-/* 视频占位符 */
-.video-placeholder {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: #666;
-}
-
-.video-placeholder svg {
-  width: 64px;
-  height: 64px;
-}
-
-.video-placeholder p {
-  margin: 0;
-  font-size: 14px;
 }
 
 /* 时间线编辑区域 */
@@ -1040,6 +818,88 @@ onUnmounted(() => {
   font-size: 11px;
   color: #666;
   font-family: 'SF Mono', Monaco, monospace;
+}
+
+/* 创建模式选择 */
+.create-mode-section {
+  padding: 16px 24px;
+  border-top: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+
+.section-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #888;
+  margin-bottom: 10px;
+}
+
+.create-mode-options {
+  display: flex;
+  gap: 12px;
+}
+
+.mode-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  background: #222;
+  border: 1px solid #333;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-option:hover:not(.disabled) {
+  background: #2a2a2a;
+  border-color: #444;
+}
+
+.mode-option.active {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: #FBBF24;
+}
+
+.mode-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-option input[type="radio"] {
+  display: none;
+}
+
+.mode-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mode-icon {
+  font-size: 20px;
+}
+
+.mode-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mode-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.mode-desc {
+  font-size: 11px;
+  color: #888;
+}
+
+.mode-option.active .mode-title {
+  color: #FBBF24;
 }
 
 /* 角色名称输入 */

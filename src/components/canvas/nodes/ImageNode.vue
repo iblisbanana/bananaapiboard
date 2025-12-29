@@ -457,8 +457,28 @@ function handleEditorSaveMask(data) {
   closeImageEditor()
 }
 
+// 构建七牛云强制下载URL（使用attname参数）
+function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
 async function handleToolbarDownload() {
   if (!currentImageUrl.value) return
+  
+  const filename = `image_${props.id || Date.now()}.png`
+  
+  // 如果是七牛云 URL，使用 attname 参数强制下载
+  if (isQiniuCdnUrl(currentImageUrl.value)) {
+    const link = document.createElement('a')
+    link.href = buildQiniuForceDownloadUrl(currentImageUrl.value, filename)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    return
+  }
   
   try {
     // 使用 fetch 获取图片 blob，支持跨域下载
@@ -471,7 +491,7 @@ async function handleToolbarDownload() {
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `image_${props.id || Date.now()}.png`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -481,7 +501,7 @@ async function handleToolbarDownload() {
     // 如果 fetch 失败，尝试直接下载
     const link = document.createElement('a')
     link.href = currentImageUrl.value
-    link.download = `image_${props.id || Date.now()}.png`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

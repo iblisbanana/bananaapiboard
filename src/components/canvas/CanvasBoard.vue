@@ -1370,11 +1370,11 @@ async function handleFileDrop(event) {
     if (!category) continue
     
     try {
-      const dataUrl = await readFileAsBase64(file)
       const nodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       
       // 根据文件类型创建不同的节点
       if (category === 'image') {
+        const dataUrl = await readFileAsBase64(file)
         canvasStore.addNode({
           id: nodeId,
           type: 'image-input',
@@ -1386,6 +1386,8 @@ async function handleFileDrop(event) {
           }
         })
       } else if (category === 'video') {
+        // 视频使用 Object URL，避免 base64 编码大文件导致性能问题
+        const objectUrl = URL.createObjectURL(file)
         canvasStore.addNode({
           id: nodeId,
           type: 'video',
@@ -1395,8 +1397,11 @@ async function handleFileDrop(event) {
             status: 'success',
             output: {
               type: 'video',
-              url: dataUrl
-            }
+              url: objectUrl
+            },
+            // 保存原始文件引用，用于后续上传
+            localFile: file,
+            isLocalVideo: true
           }
         })
       } else if (category === 'audio') {
