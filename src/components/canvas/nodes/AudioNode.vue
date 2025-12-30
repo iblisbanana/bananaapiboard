@@ -9,11 +9,14 @@
  * - 右侧(+)：输出连接
  * - 快捷操作：图片对口型、音频生视频、音频提取文案
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, inject, onMounted, onUnmounted } from 'vue'
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import { useCanvasStore } from '@/stores/canvas'
-import { getTenantHeaders } from '@/config/tenant'
+import { getTenantHeaders, getAvailableMusicModels } from '@/config/tenant'
 import { useI18n } from '@/i18n'
+import { showAlert, showInsufficientPointsDialog } from '@/composables/useCanvasDialog'
+import MusicTagsSelector from '@/components/canvas/MusicTagsSelector.vue'
+import apiClient from '@/api/client'
 
 const { t } = useI18n()
 
@@ -24,9 +27,261 @@ const props = defineProps({
 })
 
 const canvasStore = useCanvasStore()
+const userInfo = inject('userInfo')
 
 // Vue Flow 实例 - 用于在节点尺寸变化时更新连线
 const { updateNodeInternals } = useVueFlow()
+
+// 可用音乐模型列表 - 从租户配置动态获取
+const musicModels = computed(() => {
+  return getAvailableMusicModels()
+})
+
+// 音乐生成相关状态
+const selectedMusicModel = ref(props.data.musicModel || musicModels.value[0]?.value || 'chirp-v4')
+const customMode = ref(props.data.customMode || false)
+const musicPrompt = ref(props.data.musicPrompt || '')
+const title = ref(props.data.title || '')
+const tags = ref(props.data.tags || '')
+const negativeTags = ref(props.data.negativeTags || '')
+const makeInstrumental = ref(props.data.makeInstrumental || false)
+const isGeneratingMusic = ref(false)
+
+// 模型下拉框状态
+const isMusicModelDropdownOpen = ref(false)
+const musicModelSelectorRef = ref(null)
+const dropdownDirection = ref('down')
+
+// 高级选项折叠状态
+const showAdvancedOptions = ref(false)
+
+// 当前选中模型的配置
+const currentMusicModelConfig = computed(() => {
+  return musicModels.value.find(m => m.value === selectedMusicModel.value) || musicModels.value[0]
+})
+
+// 音乐生成积分消耗（生成2首歌）
+const musicPointsCost = computed(() => (currentMusicModelConfig.value?.pointsCost || 20) * 2)
+
+// 用户积分
+const userPoints = computed(() => {
+  if (!userInfo?.value) return 0
+  return (userInfo.value.package_points || 0) + (userInfo.value.points || 0)
+})
+
+// 继承的数据（来自上游节点）
+const inheritedText = computed(() => props.data.inheritedData?.content || '')
+
+// 监听继承数据，自动填充到提示词
+watch(inheritedText, (newText) => {
+  if (newText && !musicPrompt.value) {
+    musicPrompt.value = newText
+  }
+}, { immediate: true })
+
+// 切换模型下拉框
+function toggleMusicModelDropdown(event) {
+  event.stopPropagation()
+  
+  // 计算下拉方向
+  if (musicModelSelectorRef.value) {
+    const rect = musicModelSelectorRef.value.getBoundingClientRect()
+    const viewportHeight = window.innerHeight
+    const dropdownHeight = 200
+    
+    if (rect.bottom + dropdownHeight > viewportHeight && rect.top > dropdownHeight) {
+      dropdownDirection.value = 'up'
+    } else {
+      dropdownDirection.value = 'down'
+    }
+  }
+  
+  isMusicModelDropdownOpen.value = !isMusicModelDropdownOpen.value
+}
+
+// 选择模型
+function selectMusicModel(modelValue) {
+  selectedMusicModel.value = modelValue
+  isMusicModelDropdownOpen.value = false
+  // 保存到节点数据
+  canvasStore.updateNodeData(props.id, { musicModel: modelValue })
+}
+
+// 点击外部关闭下拉框
+function handleMusicModelDropdownClickOutside(event) {
+  const dropdown = event.target.closest('.music-model-selector')
+  if (!dropdown) {
+    isMusicModelDropdownOpen.value = false
+  }
+}
+
+// 处理下拉列表滚轮事件
+function handleDropdownWheel(event) {
+  event.stopPropagation()
+}
+
+// 生成音乐
+async function handleGenerateMusic() {
+  // 检查积分
+  if (userPoints.value < musicPointsCost.value) {
+    await showInsufficientPointsDialog(musicPointsCost.value, userPoints.value, 1)
+    return
+  }
+
+  // 检查输入
+  if (!musicPrompt.value.trim()) {
+    await showAlert('请输入音乐描述或歌词', '提示')
+    return
+  }
+
+  // 自定义模式下必须填写歌名
+  if (customMode.value && !title.value.trim()) {
+    await showAlert('自定义模式需要填写歌名', '提示')
+    return
+  }
+
+  isGeneratingMusic.value = true
+
+  // 更新节点状态，保存所有参数
+  canvasStore.updateNodeData(props.id, {
+    status: 'processing',
+    musicPrompt: musicPrompt.value,
+    musicModel: selectedMusicModel.value,
+    customMode: customMode.value,
+    title: title.value,
+    tags: tags.value,
+    negativeTags: negativeTags.value,
+    makeInstrumental: makeInstrumental.value
+  })
+
+  try {
+    const response = await apiClient.post('/api/music/generate', {
+      custom_mode: customMode.value ? '1' : '0',
+      prompt: musicPrompt.value,
+      title: customMode.value ? title.value : undefined,
+      tags: tags.value || undefined,
+      negative_tags: negativeTags.value || undefined,
+      model: selectedMusicModel.value,
+      make_instrumental: makeInstrumental.value ? '1' : '0'
+    }, {
+      headers: getTenantHeaders()
+    })
+    
+    console.log('[AudioNode] 音乐生成任务已提交:', response.data)
+    
+    const taskIds = response.data.task_ids || []
+    
+    // 保存任务ID到节点数据
+    canvasStore.updateNodeData(props.id, {
+      taskIds,
+      status: 'processing'
+    })
+    
+    // 任务提交成功，立即恢复按钮状态
+    isGeneratingMusic.value = false
+    
+    // 开始轮询任务状态
+    pollMusicStatus(taskIds)
+    
+  } catch (error) {
+    console.error('[AudioNode] 音乐生成失败:', error)
+    canvasStore.updateNodeData(props.id, {
+      status: 'error',
+      error: error.response?.data?.error || error.message || '生成失败'
+    })
+    isGeneratingMusic.value = false
+  }
+}
+
+// 轮询音乐生成状态
+async function pollMusicStatus(taskIds) {
+  const maxAttempts = 60 // 最多轮询2分钟
+  let attempts = 0
+  
+  const poll = async () => {
+    if (attempts >= maxAttempts) {
+      canvasStore.updateNodeData(props.id, {
+        status: 'error',
+        error: '生成超时，请稍后查看历史记录'
+      })
+      return
+    }
+    
+    attempts++
+    
+    try {
+      const promises = taskIds.map(taskId =>
+        apiClient.get(`/api/music/query/${taskId}`, {
+          headers: getTenantHeaders()
+        })
+      )
+      
+      const responses = await Promise.all(promises)
+      const histories = responses.map(r => r.data)
+      
+      const allCompleted = histories.every(h => h.status === 'completed')
+      const anyFailed = histories.some(h => h.status === 'failed')
+      const anyStreaming = histories.some(h => h.status === 'streaming')
+      
+      if (anyFailed) {
+        const failedSong = histories.find(h => h.status === 'failed')
+        canvasStore.updateNodeData(props.id, {
+          status: 'error',
+          error: failedSong.error_message || '生成失败',
+          musicHistory: histories
+        })
+      } else if (allCompleted) {
+        // 完成后更新节点数据
+        const firstSong = histories[0]
+        canvasStore.updateNodeData(props.id, {
+          status: 'success',
+          musicHistory: histories,
+          audioUrl: firstSong.audio_url || firstSong.audio_stream_url,
+          audioData: firstSong.audio_url || firstSong.audio_stream_url,
+          title: firstSong.title || '生成的音乐',
+          output: {
+            type: 'audio',
+            url: firstSong.audio_url || firstSong.audio_stream_url
+          }
+        })
+        // 刷新用户积分
+        window.dispatchEvent(new CustomEvent('user-info-updated'))
+      } else if (anyStreaming) {
+        canvasStore.updateNodeData(props.id, {
+          status: 'streaming',
+          musicHistory: histories
+        })
+        setTimeout(poll, 2000)
+      } else {
+        setTimeout(poll, 2000)
+      }
+      
+    } catch (error) {
+      console.error('[AudioNode] 轮询失败:', error)
+      setTimeout(poll, 2000)
+    }
+  }
+  
+  poll()
+}
+
+// 键盘快捷键
+function handleMusicKeyDown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    handleGenerateMusic()
+  }
+}
+
+// 组件挂载时添加全局点击事件监听
+onMounted(() => {
+  document.addEventListener('click', handleMusicModelDropdownClickOutside)
+})
+
+// 组件卸载时移除监听
+onUnmounted(() => {
+  document.removeEventListener('click', handleMusicModelDropdownClickOutside)
+})
 
 // 标签编辑状态
 const isEditingLabel = ref(false)
@@ -67,6 +322,11 @@ const nodeClass = computed(() => ({
   'has-output': hasAudio.value,
   'resizing': isResizing.value
 }))
+
+// 是否显示底部配置面板 - 选中时显示
+const showConfigPanel = computed(() => {
+  return props.selected === true
+})
 
 // 是否有音频
 const hasAudio = computed(() => {
@@ -147,22 +407,17 @@ function handleLabelKeyDown(event) {
   }
 }
 
-// 快捷操作 - 使用翻译键
+// 快捷操作 - 简化版
 const quickActions = [
   { 
-    icon: '◐',
-    labelKey: 'canvas.audioNode.lipSync', 
-    action: () => handleLipSync()
+    icon: '↑',
+    label: '上传本地音频', 
+    action: () => triggerUpload()
   },
   { 
-    icon: '▶',
-    labelKey: 'canvas.audioNode.audioToVideo', 
+    icon: '♫',
+    label: '音频生视频', 
     action: () => handleAudioToVideo()
-  },
-  { 
-    icon: '✎',
-    labelKey: 'canvas.audioNode.audioToText', 
-    action: () => handleAudioToText()
   }
 ]
 
@@ -783,19 +1038,18 @@ function handleReupload() {
           
         </div>
         
-        <!-- 无音频时显示空状态（与 VideoNode 统一风格） -->
+        <!-- 无音频时显示空状态 -->
         <div v-else class="node-content">
-          <!-- 空状态 - 快捷操作 -->
           <div class="empty-state">
-            <div class="hint-text">{{ t('canvas.textNode.try') }}</div>
+            <div class="hint-text">尝试：</div>
             <div 
               v-for="action in quickActions"
-              :key="action.labelKey"
+              :key="action.label"
               class="quick-action"
               @click.stop="action.action"
             >
               <span class="action-icon">{{ action.icon }}</span>
-              <span class="action-label">{{ t(action.labelKey) }}</span>
+              <span class="action-label">{{ action.label }}</span>
             </div>
           </div>
         </div>
@@ -828,6 +1082,150 @@ function handleReupload() {
       >
         +
       </button>
+    </div>
+    
+    <!-- 底部配置面板（选中时显示） - 黑白现代风格 -->
+    <div v-if="showConfigPanel" class="config-panel" @mousedown.stop>
+      <!-- 音乐生成配置（无音频时显示） -->
+      <div v-if="!hasAudio" class="music-gen-panel">
+        <!-- 大文本输入区 -->
+        <div class="prompt-area">
+          <textarea
+            v-model="musicPrompt"
+            class="prompt-textarea"
+            placeholder="描述您想要的音乐。"
+            rows="4"
+            @keydown="handleMusicKeyDown"
+          ></textarea>
+          <button class="expand-btn" title="展开">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+            </svg>
+          </button>
+        </div>
+        
+        <!-- 控制栏 -->
+        <div class="control-bar">
+          <!-- 左侧：类型选择 -->
+          <div class="type-selector">
+            <span class="type-icon">♫</span>
+            <span class="type-label">音乐</span>
+            <span class="type-arrow">▾</span>
+          </div>
+          
+          <!-- 模型选择器 -->
+          <div class="model-selector" ref="musicModelSelectorRef" @click.stop>
+            <div class="model-trigger" @click="toggleMusicModelDropdown">
+              <span class="model-icon">∥</span>
+              <span class="model-name">{{ currentMusicModelConfig?.label || selectedMusicModel }}</span>
+              <span class="model-arrow" :class="{ 'rotate': isMusicModelDropdownOpen }">▾</span>
+            </div>
+            
+            <!-- 模型下拉列表 -->
+            <Transition name="dropdown-fade">
+              <div v-if="isMusicModelDropdownOpen" class="model-dropdown-list" @wheel="handleDropdownWheel">
+                <div
+                  v-for="m in musicModels"
+                  :key="m.value"
+                  class="model-option"
+                  :class="{ 'active': selectedMusicModel === m.value }"
+                  @click="selectMusicModel(m.value)"
+                >
+                  <span class="option-name">{{ m.label }}</span>
+                  <span v-if="m.description" class="option-desc">{{ m.description }}</span>
+                </div>
+              </div>
+            </Transition>
+          </div>
+          
+          <!-- 字数统计 -->
+          <span class="char-count">{{ musicPrompt.length }}/4100</span>
+          
+          <!-- 积分显示 -->
+          <div class="points-badge">
+            <span class="points-icon">◎</span>
+            <span class="points-value">{{ musicPointsCost }}积分</span>
+          </div>
+          
+          <!-- 生成按钮 -->
+          <button
+            class="gen-btn"
+            :disabled="isGeneratingMusic || !musicPrompt.trim()"
+            @click="handleGenerateMusic"
+          >
+            <svg v-if="!isGeneratingMusic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M12 19V5M5 12l7-7 7 7"/>
+            </svg>
+            <span v-else class="loading-dots">···</span>
+          </button>
+        </div>
+        
+        <!-- 展开/收起按钮 -->
+        <button class="collapse-trigger" @click="showAdvancedOptions = !showAdvancedOptions">
+          <span class="collapse-icon" :class="{ 'expanded': showAdvancedOptions }">∧</span>
+          <span>{{ showAdvancedOptions ? '收起' : '展开' }}</span>
+        </button>
+        
+        <!-- 高级选项 -->
+        <Transition name="slide-down">
+          <div v-if="showAdvancedOptions" class="advanced-options">
+            <!-- 纯音乐开关 -->
+            <div class="option-row">
+              <span class="option-label">纯音乐</span>
+              <label class="toggle-switch">
+                <input type="checkbox" v-model="makeInstrumental" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <!-- 生成模式 -->
+            <div class="option-row">
+              <span class="option-label">生成模式</span>
+              <div class="mode-tabs">
+                <button :class="['mode-tab', { active: !customMode }]" @click="customMode = false">灵感</button>
+                <button :class="['mode-tab', { active: customMode }]" @click="customMode = true">自定义</button>
+              </div>
+            </div>
+            
+            <!-- 歌名（仅自定义模式） -->
+            <div v-if="customMode" class="option-row vertical">
+              <span class="option-label">歌名</span>
+              <input v-model="title" type="text" class="option-input" placeholder="输入歌名" />
+            </div>
+            
+            <!-- 风格标签 -->
+            <div class="option-row vertical">
+              <span class="option-label">风格标签</span>
+              <MusicTagsSelector v-model="tags" />
+            </div>
+            
+            <!-- 排除标签 -->
+            <div class="option-row vertical">
+              <span class="option-label">排除标签</span>
+              <input v-model="negativeTags" type="text" class="option-input" placeholder="逗号分隔" />
+            </div>
+          </div>
+        </Transition>
+      </div>
+      
+      <!-- 有音频时的面板 -->
+      <div v-else class="audio-info-panel">
+        <div class="info-header">
+          <span class="info-title">{{ audioTitle }}</span>
+          <button class="reupload-btn" @click.stop="handleReupload">重新生成</button>
+        </div>
+        <div class="quick-actions-row">
+          <button class="action-chip" @click.stop="handleLipSync">
+            <span>◐</span> 对口型
+          </button>
+          <button class="action-chip" @click.stop="handleAudioToVideo">
+            <span>▶</span> 生视频
+          </button>
+          <button class="action-chip" @click.stop="handleAudioToText">
+            <span>✎</span> 提文案
+          </button>
+        </div>
+      </div>
     </div>
     
     <!-- 右侧输出端口（隐藏但保留给 Vue Flow 用于边渲染） -->
@@ -1299,5 +1697,545 @@ function handleReupload() {
   opacity: 0;
   overflow: hidden;
   z-index: -1;
+}
+
+/* ========== 底部配置面板 - 黑白现代风格 ========== */
+.config-panel {
+  position: absolute;
+  top: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 520px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 1000;
+  pointer-events: auto;
+}
+
+/* ===== 音乐生成面板 ===== */
+.music-gen-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 提示词输入区域 */
+.prompt-area {
+  position: relative;
+  padding: 20px 20px 16px;
+}
+
+.prompt-textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.prompt-textarea::placeholder {
+  color: #666666;
+}
+
+.expand-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: #666666;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.expand-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #ffffff;
+}
+
+/* 控制栏 */
+.control-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #141414;
+  border-top: 1px solid #252525;
+}
+
+/* 类型选择器 */
+.type-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #252525;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.type-selector:hover {
+  background: #2a2a2a;
+}
+
+.type-icon {
+  font-size: 16px;
+  color: #888888;
+}
+
+.type-label {
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.type-arrow {
+  font-size: 10px;
+  color: #666666;
+}
+
+/* 模型选择器 */
+.model-selector {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.model-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #252525;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.model-trigger:hover {
+  background: #2a2a2a;
+}
+
+.model-icon {
+  font-size: 14px;
+  color: #888888;
+}
+
+.model-name {
+  flex: 1;
+  font-size: 14px;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-arrow {
+  font-size: 10px;
+  color: #666666;
+  transition: transform 0.2s;
+}
+
+.model-arrow.rotate {
+  transform: rotate(180deg);
+}
+
+/* 模型下拉列表 */
+.model-dropdown-list {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: #1e1e1e;
+  border: 1px solid #333333;
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  z-index: 300;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.model-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.model-option:hover {
+  background: #2a2a2a;
+}
+
+.model-option.active {
+  background: #333333;
+}
+
+.option-name {
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.option-desc {
+  font-size: 12px;
+  color: #888888;
+}
+
+/* 字数统计 */
+.char-count {
+  font-size: 13px;
+  color: #666666;
+  white-space: nowrap;
+}
+
+/* 积分徽章 */
+.points-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: #252525;
+  border-radius: 20px;
+}
+
+.points-icon {
+  font-size: 14px;
+  color: #888888;
+}
+
+.points-value {
+  font-size: 13px;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+/* 生成按钮 */
+.gen-btn {
+  width: 40px;
+  height: 40px;
+  background: #ffffff;
+  border: none;
+  border-radius: 50%;
+  color: #000000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.gen-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.2);
+}
+
+.gen-btn:disabled {
+  background: #333333;
+  color: #666666;
+  cursor: not-allowed;
+}
+
+.loading-dots {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* 展开/收起按钮 */
+.collapse-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid #252525;
+  color: #888888;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.collapse-trigger:hover {
+  background: rgba(255, 255, 255, 0.02);
+  color: #ffffff;
+}
+
+.collapse-icon {
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+
+.collapse-icon.expanded {
+  transform: rotate(180deg);
+}
+
+/* 高级选项 */
+.advanced-options {
+  padding: 16px 20px 20px;
+  border-top: 1px solid #252525;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.option-row.vertical {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.option-label {
+  font-size: 14px;
+  color: #888888;
+}
+
+.option-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #252525;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.option-input:focus {
+  border-color: #555555;
+}
+
+.option-input::placeholder {
+  color: #555555;
+}
+
+/* 开关 */
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #333333;
+  border-radius: 24px;
+  transition: background 0.2s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #888888;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: #ffffff;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+  background: #000000;
+}
+
+/* 模式切换 */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  background: #252525;
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.mode-tab {
+  padding: 6px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #888888;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-tab:hover {
+  color: #ffffff;
+}
+
+.mode-tab.active {
+  background: #333333;
+  color: #ffffff;
+}
+
+/* ===== 有音频时的信息面板 ===== */
+.audio-info-panel {
+  padding: 16px 20px;
+}
+
+.info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.info-title {
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 12px;
+}
+
+.reupload-btn {
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid #333333;
+  border-radius: 6px;
+  color: #888888;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.reupload-btn:hover {
+  border-color: #555555;
+  color: #ffffff;
+}
+
+.quick-actions-row {
+  display: flex;
+  gap: 8px;
+}
+
+.action-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: #252525;
+  border: none;
+  border-radius: 20px;
+  color: #cccccc;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-chip:hover {
+  background: #333333;
+  color: #ffffff;
+}
+
+.action-chip span:first-child {
+  font-size: 14px;
+}
+
+/* 下拉动画 */
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.3s ease;
+  transform-origin: top;
+}
+
+.slide-down-enter-from,
+.slide-down-leave-to {
+  opacity: 0;
+  max-height: 0;
+  transform: scaleY(0.9);
+}
+
+.slide-down-enter-to,
+.slide-down-leave-from {
+  opacity: 1;
+  max-height: 500px;
+  transform: scaleY(1);
+}
+
+/* 模型下拉框淡入动画 */
+.dropdown-fade-enter-active,
+.dropdown-fade-leave-active {
+  transition: all 0.2s ease;
+}
+
+.dropdown-fade-enter-from,
+.dropdown-fade-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* 滚动条样式 */
+.model-dropdown-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.model-dropdown-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.model-dropdown-list::-webkit-scrollbar-thumb {
+  background: #444444;
+  border-radius: 3px;
+}
+
+.advanced-options::-webkit-scrollbar {
+  width: 6px;
+}
+
+.advanced-options::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.advanced-options::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 3px;
 }
 </style>

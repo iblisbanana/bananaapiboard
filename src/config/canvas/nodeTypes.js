@@ -16,6 +16,7 @@ export const NODE_TYPES = {
   IMAGE_TO_IMAGE: 'image-to-image',
   TEXT_TO_VIDEO: 'text-to-video',
   IMAGE_TO_VIDEO: 'image-to-video',
+  AUDIO_GEN: 'audio-gen',
   
   // LLM 智能类
   LLM_PROMPT_ENHANCE: 'llm-prompt-enhance',
@@ -145,7 +146,20 @@ export const NODE_TYPE_CONFIG = {
     outputType: 'video',
     consumesPoints: true
   },
-  
+
+  [NODE_TYPES.AUDIO_GEN]: {
+    label: 'canvas.nodeConfig.audioGen.label',
+    description: 'canvas.nodeConfig.audioGen.desc',
+    icon: '♫',
+    category: 'generate',
+    color: '#a855f7',
+    hasInput: true,
+    hasOutput: true,
+    inputType: 'text',
+    outputType: 'audio',
+    consumesPoints: true
+  },
+
   [NODE_TYPES.LLM_PROMPT_ENHANCE]: {
     label: 'canvas.nodeConfig.promptEnhance.label',
     description: 'canvas.nodeConfig.promptEnhance.desc',
@@ -376,6 +390,7 @@ export const CONNECTION_RULES = {
   [NODE_TYPES.TEXT_INPUT]: [
     NODE_TYPES.TEXT_TO_IMAGE,
     NODE_TYPES.TEXT_TO_VIDEO,
+    NODE_TYPES.AUDIO_GEN,
     NODE_TYPES.TEXT_TO_MUSIC,
     NODE_TYPES.LLM_PROMPT_ENHANCE,
     NODE_TYPES.LLM_CONTENT_EXPAND,
@@ -547,7 +562,7 @@ export const NODE_CATEGORIES = {
   },
   generate: {
     label: '生成',
-    types: [NODE_TYPES.TEXT_TO_IMAGE, NODE_TYPES.IMAGE_TO_IMAGE, NODE_TYPES.TEXT_TO_VIDEO, NODE_TYPES.IMAGE_TO_VIDEO]
+    types: [NODE_TYPES.TEXT_TO_IMAGE, NODE_TYPES.IMAGE_TO_IMAGE, NODE_TYPES.TEXT_TO_VIDEO, NODE_TYPES.IMAGE_TO_VIDEO, NODE_TYPES.AUDIO_GEN]
   },
   llm: {
     label: 'AI 智能',

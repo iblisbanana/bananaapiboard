@@ -53,12 +53,50 @@ const availableNodes = computed(() => {
     // 右侧添加 = 添加下游节点
     return getDownstreamOptions(triggerNode.value.type)
   }
-  
-  // 否则显示输入类节点
-  return NODE_CATEGORIES.input.types.map(type => ({
+
+  // 输入类节点（文本、图片、视频、音频等需要上传文件的节点）
+  const inputNodes = NODE_CATEGORIES.input.types.map(type => ({
     type,
+    category: 'input',
     ...NODE_TYPE_CONFIG[type]
   }))
+
+  // 双击画布时只显示输入节点，不显示生成节点
+  // 生成节点应该从输入节点的右侧+按钮添加，形成工作流
+  if (props.trigger === 'canvas') {
+    return inputNodes
+  }
+
+  // 点击工具栏+按钮时显示输入节点和生成节点
+  // 生成类节点，排除 audio-gen（已整合到 AudioNode）
+  const generateNodes = NODE_CATEGORIES.generate.types
+    .filter(type => type !== 'audio-gen')
+    .map(type => ({
+      type,
+      category: 'generate',
+      ...NODE_TYPE_CONFIG[type]
+    }))
+
+  return [...inputNodes, ...generateNodes]
+})
+
+// 按分类分组的节点
+const nodesByCategory = computed(() => {
+  if (triggerNode.value) {
+    // 如果是从节点触发，不分组
+    return null
+  }
+
+  const grouped = {}
+  availableNodes.value.forEach(node => {
+    const category = node.category || 'other'
+    if (!grouped[category]) {
+      grouped[category] = []
+    }
+    grouped[category].push(node)
+  })
+
+  return grouped
 })
 
 // 面板位置样式
@@ -580,19 +618,60 @@ function formatFileSize(bytes) {
     
     <!-- 节点列表 -->
     <template v-if="availableNodes.length > 0">
-      <div 
-        v-for="node in availableNodes" 
-        :key="node.type"
-        class="node-selector-item"
-        :class="{ selected: selectedType === node.type }"
-        @click="selectNodeType(node.type)"
-      >
-        <div class="node-selector-icon">{{ node.icon }}</div>
-        <div class="node-selector-info">
-          <div class="node-selector-name">{{ t(node.label) }}</div>
-          <div class="node-selector-desc" v-if="node.description">{{ t(node.description) }}</div>
+      <!-- 按分类显示（双击空白处或点击工具栏时） -->
+      <template v-if="nodesByCategory">
+        <!-- 输入节点分类 -->
+        <template v-if="nodesByCategory.input && nodesByCategory.input.length > 0">
+          <div
+            v-for="node in nodesByCategory.input"
+            :key="node.type"
+            class="node-selector-item"
+            :class="{ selected: selectedType === node.type }"
+            @click="selectNodeType(node.type)"
+          >
+            <div class="node-selector-icon">{{ node.icon }}</div>
+            <div class="node-selector-info">
+              <div class="node-selector-name">{{ t(node.label) }}</div>
+              <div class="node-selector-desc" v-if="node.description">{{ t(node.description) }}</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 生成节点分类（仅工具栏触发时显示） -->
+        <template v-if="nodesByCategory.generate && nodesByCategory.generate.length > 0">
+          <div class="node-selector-divider"></div>
+          <div
+            v-for="node in nodesByCategory.generate"
+            :key="node.type"
+            class="node-selector-item"
+            :class="{ selected: selectedType === node.type }"
+            @click="selectNodeType(node.type)"
+          >
+            <div class="node-selector-icon">{{ node.icon }}</div>
+            <div class="node-selector-info">
+              <div class="node-selector-name">{{ t(node.label) }}</div>
+              <div class="node-selector-desc" v-if="node.description">{{ t(node.description) }}</div>
+            </div>
+          </div>
+        </template>
+      </template>
+
+      <!-- 不分类显示（从节点触发时） -->
+      <template v-else>
+        <div
+          v-for="node in availableNodes"
+          :key="node.type"
+          class="node-selector-item"
+          :class="{ selected: selectedType === node.type }"
+          @click="selectNodeType(node.type)"
+        >
+          <div class="node-selector-icon">{{ node.icon }}</div>
+          <div class="node-selector-info">
+            <div class="node-selector-name">{{ t(node.label) }}</div>
+            <div class="node-selector-desc" v-if="node.description">{{ t(node.description) }}</div>
+          </div>
         </div>
-      </div>
+      </template>
     </template>
     
     <!-- 无可用节点提示 -->
@@ -627,6 +706,21 @@ function formatFileSize(bytes) {
 
 <style scoped>
 /* 节点选择器样式已在 canvas.css 中定义 */
+
+/* 分类标题 */
+.node-selector-category {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--canvas-text-tertiary, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.node-selector-category:first-of-type {
+  margin-top: 0;
+}
 
 /* 空状态提示 */
 .node-selector-empty {

@@ -610,6 +610,12 @@
   box-shadow: none !important;
   border: none !important;
   background: transparent !important;
+  overflow: visible !important;
+}
+
+/* 确保节点内部包装器也允许溢出显示（用于配置面板） */
+.vue-flow__node > div {
+  overflow: visible !important;
 }
 
 /* 编组节点放在最底层 */

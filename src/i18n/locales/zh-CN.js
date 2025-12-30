@@ -518,6 +518,7 @@ export default {
       imageToImage: { label: '图生图', desc: '图片风格转换' },
       textToVideo: { label: '文生视频', desc: '文本生成视频' },
       imageToVideo: { label: '图生视频', desc: '图片生成视频' },
+      audioGen: { label: '音乐生成', desc: 'AI 生成音乐' },
       promptEnhance: { label: '提示词优化', desc: 'AI 优化提示词' },
       imageDescribe: { label: '图片描述', desc: '图片反推提示词' },
       contentExpand: { label: '内容扩写', desc: 'AI 内容扩写' },
@@ -581,7 +582,12 @@ export default {
       refAudio: '参考音频',
       uploadFailed: '音频上传失败，请重试',
       generateFailed: '生成失败',
-      generating: '生成中...'
+      generating: '生成中...',
+      dragOrClick: '拖拽或点击上传音频文件',
+      upload: '上传音频',
+      currentFile: '当前文件',
+      changeAudio: '更换音频',
+      musicPromptPlaceholder: '描述你想要生成的音乐风格、情绪...(按下Enter生成，Shift+Enter换行)'
     },
     // 文本节点快捷操作
     textNode: {

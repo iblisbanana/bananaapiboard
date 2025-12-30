@@ -233,3 +233,6 @@ export const api = {
   patch: (path, body) => apiRequest(path, { method: 'PATCH', body }),
   delete: (path) => apiRequest(path, { method: 'DELETE' })
 }
+
+// 默认导出
+export default api

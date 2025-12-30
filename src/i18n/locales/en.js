@@ -517,6 +517,7 @@ export default {
       imageToImage: { label: 'Image to Image', desc: 'Image style transfer' },
       textToVideo: { label: 'Text to Video', desc: 'Generate videos from text' },
       imageToVideo: { label: 'Image to Video', desc: 'Generate videos from images' },
+      audioGen: { label: 'Music Generation', desc: 'AI music generation' },
       promptEnhance: { label: 'Prompt Enhance', desc: 'AI prompt optimization' },
       imageDescribe: { label: 'Image Describe', desc: 'Reverse prompt from image' },
       contentExpand: { label: 'Content Expand', desc: 'AI content expansion' },
@@ -576,7 +577,12 @@ export default {
       refAudio: 'Reference Audio',
       uploadFailed: 'Audio upload failed, please retry',
       generateFailed: 'Generation failed',
-      generating: 'Generating...'
+      generating: 'Generating...',
+      dragOrClick: 'Drag or click to upload audio file',
+      upload: 'Upload Audio',
+      currentFile: 'Current File',
+      changeAudio: 'Change Audio',
+      musicPromptPlaceholder: 'Describe the music style, mood you want... (Press Enter to generate, Shift+Enter for new line)'
     },
     // Text node quick actions
     textNode: {

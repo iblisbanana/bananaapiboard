@@ -96,6 +96,11 @@ const defaultConfig = {
     enableVoucher: true,    // 是否启用兑换券
     enableInvite: true,     // 是否启用邀请系统
     enablePackages: true    // 是否启用套餐系统
+  },
+  
+  // 音乐模型配置
+  music_config: {
+    models: []  // 从租户端配置获取
   }
 }
 
@@ -255,6 +260,12 @@ export async function loadBrandConfig(forceReload = false) {
       if (data.llm_models) {
         runtimeConfig.llm_models = data.llm_models
         console.log('[tenant] LLM 模型配置已更新:', data.llm_models)
+      }
+      
+      // 更新音乐模型配置
+      if (data.music_config) {
+        runtimeConfig.music_config = data.music_config
+        console.log('[tenant] 音乐模型配置已更新:', data.music_config)
       }
       
       // 保存到本地存储
@@ -920,6 +931,51 @@ export const getApiUrl = (path) => {
   }
   const base = config.apiBase || ''
   return `${base}${path}`
+}
+
+// 获取所有可用的音乐模型列表（从配置中动态获取）
+export const getAvailableMusicModels = () => {
+  // 获取音乐配置
+  const musicConfig = config.music_config || {}
+  const models = musicConfig.models || []
+
+  // 默认模型配置（当没有配置时使用）
+  const defaultModels = [
+    {
+      id: 'chirp-v4',
+      name: 'Chirp V4',
+      description: '最新版本，音质更佳',
+      pointsCost: 20,
+      icon: '♫'
+    },
+    {
+      id: 'chirp-v3-5',
+      name: 'Chirp V3.5',
+      description: '稳定版本',
+      pointsCost: 15,
+      icon: '♪'
+    }
+  ]
+
+  // 如果有租户配置的模型，使用租户配置
+  if (models.length > 0) {
+    return models.map(model => ({
+      value: model.id,
+      label: model.name,
+      icon: model.icon || '♫',
+      description: model.description || '',
+      pointsCost: model.pointsCost || 20
+    }))
+  }
+
+  // 否则返回默认模型
+  return defaultModels.map(model => ({
+    value: model.id,
+    label: model.name,
+    icon: model.icon,
+    description: model.description,
+    pointsCost: model.pointsCost
+  }))
 }
 
 export default config
