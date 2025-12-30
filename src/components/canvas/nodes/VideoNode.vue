@@ -2343,43 +2343,52 @@ function buildQiniuForceDownloadUrl(url, filename) {
 }
 
 async function handleToolbarDownload() {
-  if (!normalizedVideoUrl.value) return
+  // 使用原始 URL（可能是七牛云地址），而不是 normalizedVideoUrl（可能被转换为相对路径）
+  const originalUrl = props.data.output?.url
+  if (!originalUrl) return
   
   const filename = `video_${props.id || Date.now()}.mp4`
   
-  // 如果是七牛云 URL，使用 attname 参数强制下载
-  if (isQiniuCdnUrl(normalizedVideoUrl.value)) {
-    const link = document.createElement('a')
-    link.href = buildQiniuForceDownloadUrl(normalizedVideoUrl.value, filename)
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    return
-  }
+  console.log('[VideoNode] 开始下载:', { url: originalUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(originalUrl) })
   
   try {
-    // 使用 fetch 获取视频 blob，支持跨域下载
-    const response = await fetch(normalizedVideoUrl.value, {
-      headers: getTenantHeaders()
-    })
+    // 统一使用 fetch + blob 方式强制下载（最可靠的方式）
+    // 七牛云 URL 支持跨域访问，可以直接 fetch
+    const fetchOptions = isQiniuCdnUrl(originalUrl) ? {} : { headers: getTenantHeaders() }
+    
+    const response = await fetch(originalUrl, fetchOptions)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
     const blob = await response.blob()
     
     // 创建 blob URL 并下载
-    const url = window.URL.createObjectURL(blob)
+    const blobUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
+    link.href = blobUrl
     link.download = filename
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
+    
+    console.log('[VideoNode] 下载成功:', filename)
+    
+    // 清理
+    setTimeout(() => {
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+    }, 100)
   } catch (error) {
-    console.error('[VideoNode] 下载视频失败:', error)
-    // 如果 fetch 失败，尝试直接下载
+    console.error('[VideoNode] fetch 下载失败:', error)
+    // 如果 fetch 失败（可能是跨域问题），回退到 attname 参数方式
     const link = document.createElement('a')
-    link.href = normalizedVideoUrl.value
+    const separator = originalUrl.includes('?') ? '&' : '?'
+    link.href = `${originalUrl}${separator}attname=${encodeURIComponent(filename)}`
     link.download = filename
+    link.target = '_self'
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

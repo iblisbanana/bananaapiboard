@@ -358,43 +358,53 @@ function buildQiniuForceDownloadUrl(url, filename) {
   return `${url}${separator}attname=${encodeURIComponent(filename)}`
 }
 
-// 下载视频
+// 下载视频 - 统一使用 fetch + blob 方式强制下载
 async function downloadVideo() {
   if (!props.data.output?.url) return
   
   const videoUrl = props.data.output.url
   const filename = `video_${props.id || Date.now()}.mp4`
   
-  // 如果是七牛云 URL，使用 attname 参数强制下载
-  if (isQiniuCdnUrl(videoUrl)) {
-    const link = document.createElement('a')
-    link.href = buildQiniuForceDownloadUrl(videoUrl, filename)
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    return
-  }
+  console.log('[VideoGenNode] 开始下载:', { url: videoUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(videoUrl) })
   
   try {
-    const response = await fetch(videoUrl, {
-      headers: getTenantHeaders()
-    })
+    // 统一使用 fetch + blob 方式强制下载（最可靠的方式）
+    // 七牛云 URL 支持跨域访问，可以直接 fetch
+    const fetchOptions = isQiniuCdnUrl(videoUrl) ? {} : { headers: getTenantHeaders() }
+    
+    const response = await fetch(videoUrl, fetchOptions)
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
     const blob = await response.blob()
     
-    const url = window.URL.createObjectURL(blob)
+    // 创建 blob URL 并下载
+    const blobUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
+    link.href = blobUrl
     link.download = filename
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
+    
+    console.log('[VideoGenNode] 下载成功:', filename)
+    
+    // 清理
+    setTimeout(() => {
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+    }, 100)
   } catch (error) {
-    console.error('[VideoGenNode] 下载视频失败:', error)
+    console.error('[VideoGenNode] fetch 下载失败:', error)
+    // 如果 fetch 失败（可能是跨域问题），回退到 attname 参数方式
     const link = document.createElement('a')
-    link.href = videoUrl
+    const separator = videoUrl.includes('?') ? '&' : '?'
+    link.href = `${videoUrl}${separator}attname=${encodeURIComponent(filename)}`
     link.download = filename
+    link.target = '_self'
+    link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

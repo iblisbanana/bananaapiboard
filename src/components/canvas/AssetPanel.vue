@@ -371,6 +371,8 @@ async function handleDownload() {
   if (!contextMenuAsset.value) return
   
   const asset = contextMenuAsset.value
+  closeContextMenu()
+  
   try {
     let downloadUrl = asset.url
     let filename = asset.name || `asset_${asset.id}`
@@ -381,7 +383,21 @@ async function handleDownload() {
       const blob = new Blob([asset.content || ''], { type: 'text/plain;charset=utf-8' })
       downloadUrl = URL.createObjectURL(blob)
       filename = filename.endsWith('.txt') ? filename : `${filename}.txt`
-    } else if (asset.type === 'image' && !filename.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+      
+      // 文本类型直接下载 blob
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(downloadUrl)
+      return
+    }
+    
+    // 确保文件名有正确扩展名
+    if (asset.type === 'image' && !filename.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
       filename = `${filename}.png`
     } else if (asset.type === 'video' && !filename.match(/\.(mp4|webm|mov)$/i)) {
       filename = `${filename}.mp4`
@@ -389,29 +405,52 @@ async function handleDownload() {
       filename = `${filename}.mp3`
     }
     
-    // 创建下载链接
-    const link = document.createElement('a')
-    // 如果是七牛云 URL，使用 attname 参数强制下载
-    if (isQiniuCdnUrl(downloadUrl)) {
-      link.href = buildQiniuForceDownloadUrl(downloadUrl, filename)
-    } else {
-      link.href = downloadUrl
-    }
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    console.log('[AssetPanel] 开始下载:', { url: downloadUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(downloadUrl) })
     
-    // 如果是 blob URL，释放
-    if (asset.type === 'text') {
-      URL.revokeObjectURL(downloadUrl)
+    // 统一使用 fetch + blob 方式强制下载（最可靠的方式）
+    try {
+      // 七牛云 URL 支持跨域访问，可以直接 fetch
+      const fetchOptions = isQiniuCdnUrl(downloadUrl) ? {} : { headers: getTenantHeaders() }
+      
+      const response = await fetch(downloadUrl, fetchOptions)
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      
+      const blob = await response.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      
+      console.log('[AssetPanel] 下载成功:', filename)
+      
+      // 清理
+      setTimeout(() => {
+        document.body.removeChild(link)
+        URL.revokeObjectURL(blobUrl)
+      }, 100)
+    } catch (fetchError) {
+      console.warn('[AssetPanel] fetch 下载失败，尝试 attname 方式:', fetchError)
+      // fetch 失败时，回退到 attname 参数方式
+      const link = document.createElement('a')
+      const separator = downloadUrl.includes('?') ? '&' : '?'
+      link.href = `${downloadUrl}${separator}attname=${encodeURIComponent(filename)}`
+      link.download = filename
+      link.target = '_self'
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
     }
   } catch (error) {
     console.error('[AssetPanel] 下载失败:', error)
     alert(t('errors.downloadFailed') || '下载失败')
   }
-  
-  closeContextMenu()
 }
 
 // 右键菜单 - 删除
