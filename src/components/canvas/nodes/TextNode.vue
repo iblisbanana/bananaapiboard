@@ -1908,7 +1908,7 @@ function splitSceneNodes() {
     const looseMatches = [...text.matchAll(loosePattern)]
     
     if (looseMatches.length === 0) {
-      alert('未找到分镜标记（支持格式：分镜1、分镜 1、**分镜1**、【分镜1】、Scene 1 等）')
+      console.warn('[TextNode] 未找到分镜标记（支持格式：分镜1、分镜 1、**分镜1**、【分镜1】、Scene 1 等）')
       return
     }
     
@@ -1952,7 +1952,7 @@ function splitSceneNodes() {
   }
 
   if (scenes.length === 0) {
-    alert('分镜内容为空，无法拆分')
+    console.warn('[TextNode] 分镜内容为空，无法拆分')
     return
   }
 
@@ -2021,9 +2021,8 @@ function splitSceneNodes() {
     })
   }
 
-  // 提示用户
+  // 完成提示（仅在控制台输出，不弹窗打扰用户）
   console.log(`[TextNode] 所有分镜节点创建完成，共 ${scenes.length} 个`)
-  alert(`成功拆分为 ${scenes.length} 个分镜节点！节点已自动排列在右侧。`)
 }
 
 // 点击节点时选中，并显示底部 LLM 配置面板

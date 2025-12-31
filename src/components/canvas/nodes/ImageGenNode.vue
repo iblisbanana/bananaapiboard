@@ -10,6 +10,9 @@ import { generateImageFromText, generateImageFromImage, pollTaskStatus } from '@
 import { getAvailableImageModels, getTenantHeaders } from '@/config/tenant'
 import { useI18n } from '@/i18n'
 import { showAlert, showInsufficientPointsDialog } from '@/composables/useCanvasDialog'
+import { getImagePresets, createImagePreset, updateImagePreset, incrementPresetUseCount } from '@/api/canvas/image-presets'
+import ImagePresetDialog from '../dialogs/ImagePresetDialog.vue'
+import ImagePresetManager from '../dialogs/ImagePresetManager.vue'
 
 const { t } = useI18n()
 
@@ -27,6 +30,17 @@ const { updateNodeInternals } = useVueFlow()
 
 // 模型下拉框状态
 const isModelDropdownOpen = ref(false)
+
+// 预设下拉框状态
+const isPresetDropdownOpen = ref(false)
+const selectedPreset = ref('')
+const tenantPresets = ref([]) // 租户全局预设
+const userPresets = ref([]) // 用户自定义预设
+const showImagePresetDialog = ref(false)
+const showImagePresetManager = ref(false)
+const editingPreset = ref(null)
+const tempCustomPrompt = ref('')
+const presetManagerRef = ref(null)
 
 // 本地状态
 const isGenerating = ref(false)
@@ -221,6 +235,20 @@ function handleResizeEnd() {
   document.removeEventListener('mouseup', handleResizeEnd)
 }
 
+// 获取当前选中预设的提示词（用于拼接到用户输入后面）
+const currentPresetPrompt = computed(() => {
+  if (!selectedPreset.value) return ''
+  
+  // 临时自定义使用 tempCustomPrompt
+  if (selectedPreset.value === 'temp-custom') {
+    return tempCustomPrompt.value
+  }
+  
+  // 从可用预设列表中查找
+  const preset = availablePresets.value.find(p => p.id === selectedPreset.value)
+  return preset?.prompt || ''
+})
+
 // 开始生成
 async function handleGenerate() {
   // 检查积分
@@ -229,10 +257,30 @@ async function handleGenerate() {
     return
   }
 
+  // 获取用户输入的基础提示词
+  const userPrompt = inheritedText.value || props.data.text || ''
+  
+  // 获取预设的提示词（如果有选择预设）
+  const presetPrompt = currentPresetPrompt.value
+  
+  // 拼接提示词：用户输入 + 预设提示词
+  // 预设提示词附加在用户提示词后面，用逗号分隔
+  let finalPrompt = userPrompt
+  if (presetPrompt) {
+    if (userPrompt) {
+      // 用户有输入，则拼接预设提示词到后面
+      finalPrompt = `${userPrompt}, ${presetPrompt}`
+    } else {
+      // 用户没有输入，直接使用预设提示词
+      finalPrompt = presetPrompt
+    }
+  }
+  
+  console.log('[ImageGenNode] 生成提示词:', { userPrompt, presetPrompt, finalPrompt })
+  
   // 检查输入
-  const prompt = inheritedText.value || props.data.text || ''
-  if (!prompt && inheritedImages.value.length === 0) {
-    await showAlert('请先输入提示词或上传参考图片', '提示')
+  if (!finalPrompt && inheritedImages.value.length === 0) {
+    await showAlert('请先输入提示词或选择预设，或上传参考图片', '提示')
     return
   }
   
@@ -250,7 +298,7 @@ async function handleGenerate() {
     if (nodeType === 'image-to-image' || inheritedImages.value.length > 0) {
       // 图生图
       result = await generateImageFromImage({
-        prompt: prompt || '保持原图风格',
+        prompt: finalPrompt || '保持原图风格',
         images: inheritedImages.value,
         model: props.data.model || 'nano-banana-2',
         size: props.data.size || '1K',
@@ -259,7 +307,7 @@ async function handleGenerate() {
     } else {
       // 文生图
       result = await generateImageFromText({
-        prompt,
+        prompt: finalPrompt,
         model: props.data.model || 'nano-banana-2',
         size: props.data.size || '1K',
         aspectRatio: props.data.aspectRatio || 'auto',
@@ -442,14 +490,230 @@ function handleDropdownWheel(event) {
 function handleModelDropdownClickOutside(event) {
   // 检查点击是否在下拉框外
   const dropdown = event.target.closest('.model-selector-custom')
+  const presetDropdown = event.target.closest('.preset-selector-custom')
   if (!dropdown) {
     isModelDropdownOpen.value = false
   }
+  if (!presetDropdown) {
+    isPresetDropdownOpen.value = false
+  }
+}
+
+// ========== 预设管理功能 ==========
+
+// 加载图像预设
+async function loadImagePresets() {
+  try {
+    const data = await getImagePresets()
+    tenantPresets.value = data.tenant || []
+    userPresets.value = data.user || []
+    console.log('[ImageGenNode] 图像预设已加载:', { tenant: tenantPresets.value.length, user: userPresets.value.length })
+  } catch (error) {
+    console.error('[ImageGenNode] 加载图像预设失败:', error)
+  }
+}
+
+// 可用预设列表
+const availablePresets = computed(() => {
+  const presets = []
+
+  // 1. 添加租户全局预设
+  if (tenantPresets.value.length > 0) {
+    presets.push(...tenantPresets.value.map(p => ({
+      id: `tenant-${p.id}`,
+      name: `🏢 ${p.name}`,
+      prompt: p.prompt,
+      description: p.description,
+      type: 'tenant-global',
+      _rawId: p.id
+    })))
+  }
+
+  // 2. 添加分隔线
+  if (presets.length > 0 && userPresets.value.length > 0) {
+    presets.push({ id: 'divider-1', type: 'divider' })
+  }
+
+  // 3. 添加用户自定义预设
+  if (userPresets.value.length > 0) {
+    presets.push(...userPresets.value.map(p => ({
+      id: `user-${p.id}`,
+      name: `📝 ${p.name}`,
+      prompt: p.prompt,
+      description: p.description,
+      type: 'user-custom',
+      _rawId: p.id
+    })))
+  }
+
+  // 4. 添加临时自定义（如果正在使用）
+  if (selectedPreset.value === 'temp-custom') {
+    if (presets.length > 0) {
+      presets.push({ id: 'divider-2', type: 'divider' })
+    }
+    presets.push({
+      id: 'temp-custom',
+      name: '📌 临时自定义',
+      type: 'temp-custom'
+    })
+  }
+
+  // 5. 添加操作选项
+  if (presets.length > 0) {
+    presets.push({ id: 'divider-3', type: 'divider' })
+  }
+  presets.push({
+    id: 'action-create',
+    name: '➕ 新建自定义预设',
+    type: 'action'
+  })
+  presets.push({
+    id: 'action-manage',
+    name: '⚙️ 管理我的预设',
+    type: 'action'
+  })
+
+  return presets
+})
+
+// 当前选中预设的显示名称
+const selectedPresetLabel = computed(() => {
+  if (!selectedPreset.value) {
+    return '自动 (Auto)'
+  }
+  const preset = availablePresets.value.find(p => p.id === selectedPreset.value)
+  return preset ? preset.name.replace(/^[📝🏢📌➕⚙️]\s/, '') : '自动 (Auto)'
+})
+
+// 切换预设下拉菜单
+function togglePresetDropdown(event) {
+  event?.stopPropagation()
+  isPresetDropdownOpen.value = !isPresetDropdownOpen.value
+  isModelDropdownOpen.value = false
+}
+
+// 选择预设
+function selectPreset(presetId) {
+  const preset = availablePresets.value.find(p => p.id === presetId)
+
+  if (!preset) return
+
+  // 处理特殊操作
+  if (preset.type === 'action') {
+    if (preset.id === 'action-create') {
+      openImagePresetDialog()
+    } else if (preset.id === 'action-manage') {
+      openImagePresetManager()
+    }
+    isPresetDropdownOpen.value = false
+    return
+  }
+
+  // 忽略分隔线
+  if (preset.type === 'divider') return
+
+  // 选择预设
+  selectedPreset.value = presetId
+  isPresetDropdownOpen.value = false
+
+  // 使用预设的提示词更新继承数据
+  if (preset.prompt) {
+    canvasStore.updateNodeData(props.id, {
+      inheritedData: {
+        type: 'text',
+        content: preset.prompt
+      }
+    })
+  }
+
+  // 增加使用次数（异步，不等待）
+  if (preset._rawId) {
+    incrementPresetUseCount(preset._rawId)
+  }
+
+  console.log('[ImageGenNode] 已选择预设:', preset.name)
+}
+
+// 打开自定义预设对话框（新建）
+function openImagePresetDialog() {
+  editingPreset.value = null
+  showImagePresetDialog.value = true
+}
+
+// 打开自定义预设对话框（编辑）
+function editImagePreset(preset) {
+  editingPreset.value = preset
+  showImagePresetDialog.value = true
+  showImagePresetManager.value = false
+}
+
+// 打开预设管理器
+function openImagePresetManager() {
+  showImagePresetManager.value = true
+  isPresetDropdownOpen.value = false
+}
+
+// 提交自定义预设（保存并使用）
+async function handlePresetSubmit(data) {
+  try {
+    if (editingPreset.value) {
+      // 更新现有预设
+      await updateImagePreset(editingPreset.value._rawId, data)
+      console.log('[ImageGenNode] 预设已更新')
+    } else {
+      // 创建新预设
+      const result = await createImagePreset(data)
+      console.log('[ImageGenNode] 预设已创建')
+
+      // 自动选择新创建的预设
+      selectedPreset.value = `user-${result.id}`
+
+      // 使用预设的提示词
+      canvasStore.updateNodeData(props.id, {
+        inheritedData: {
+          type: 'text',
+          content: result.prompt
+        }
+      })
+    }
+
+    // 重新加载预设列表
+    await loadImagePresets()
+
+    // 如果预设管理器打开，刷新它
+    if (presetManagerRef.value) {
+      presetManagerRef.value.loadPresets()
+    }
+
+    // 关闭对话框
+    showImagePresetDialog.value = false
+  } catch (error) {
+    console.error('[ImageGenNode] 保存预设失败:', error)
+    alert(error.message || '保存失败，请重试')
+  }
+}
+
+// 临时使用自定义提示词（不保存）
+function handleTempUse(data) {
+  tempCustomPrompt.value = data.prompt
+  selectedPreset.value = 'temp-custom'
+
+  // 使用临时提示词
+  canvasStore.updateNodeData(props.id, {
+    inheritedData: {
+      type: 'text',
+      content: data.prompt
+    }
+  })
+
+  console.log('[ImageGenNode] 使用临时自定义提示词')
 }
 
 // 组件挂载时添加全局点击事件监听
 onMounted(() => {
   document.addEventListener('click', handleModelDropdownClickOutside)
+  // 加载图像预设
+  loadImagePresets()
 })
 
 // 组件卸载时移除监听
@@ -617,6 +881,47 @@ onUnmounted(() => {
       </div>
       
       <div class="settings-body">
+        <!-- 预设选择 -->
+        <div class="setting-group">
+          <label class="setting-label">预设</label>
+          <!-- 预设选择器（自定义下拉框） -->
+          <div class="preset-selector-custom" @click.stop>
+            <div
+              class="preset-selector-trigger"
+              @click="togglePresetDropdown"
+            >
+              <span class="preset-name">{{ selectedPresetLabel }}</span>
+              <span class="select-arrow" :class="{ 'arrow-up': isPresetDropdownOpen }">▾</span>
+            </div>
+
+            <!-- 下拉选项列表 -->
+            <Transition name="dropdown-fade">
+              <div v-if="isPresetDropdownOpen" class="preset-dropdown-list" @wheel="handleDropdownWheel">
+                <div
+                  v-for="preset in availablePresets"
+                  :key="preset.id"
+                  :class="{
+                    'preset-dropdown-item': preset.type !== 'divider',
+                    'preset-dropdown-divider': preset.type === 'divider',
+                    'active': selectedPreset === preset.id,
+                    'action-item': preset.type === 'action'
+                  }"
+                  @click="selectPreset(preset.id)"
+                >
+                  <template v-if="preset.type !== 'divider'">
+                    <div class="preset-item-main">
+                      <span class="preset-item-label">{{ preset.name }}</span>
+                    </div>
+                    <div v-if="preset.description" class="preset-item-desc">
+                      {{ preset.description }}
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </Transition>
+          </div>
+        </div>
+
         <!-- 模型选择 -->
         <div class="setting-group">
           <label class="setting-label">模型</label>
@@ -705,6 +1010,26 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 图像预设对话框 -->
+    <ImagePresetDialog
+      :isOpen="showImagePresetDialog"
+      :preset="editingPreset"
+      @close="showImagePresetDialog = false"
+      @submit="handlePresetSubmit"
+      @temp-use="handleTempUse"
+    />
+
+    <!-- 图像预设管理器 -->
+    <ImagePresetManager
+      ref="presetManagerRef"
+      :isOpen="showImagePresetManager"
+      @close="showImagePresetManager = false"
+      @create="openImagePresetDialog"
+      @edit="editImagePreset"
+      @refresh="loadImagePresets"
+      @select="selectPreset"
+    />
   </div>
 </template>
 
@@ -1263,6 +1588,128 @@ onUnmounted(() => {
 .model-item-desc {
   margin-top: 4px;
   padding-left: 24px;
+  font-size: 11px;
+  color: var(--canvas-text-secondary, #a0a0a0);
+  line-height: 1.4;
+}
+
+/* 预设选择器样式（与模型选择器类似） */
+.preset-selector-custom {
+  position: relative;
+  width: 100%;
+}
+
+.preset-selector-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--canvas-bg-secondary, #141414);
+  border: 1px solid var(--canvas-border-default, #3a3a3a);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.preset-selector-trigger:hover {
+  border-color: var(--canvas-accent-primary, #3b82f6);
+}
+
+.preset-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--canvas-text-primary, #fff);
+}
+
+.preset-dropdown-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  backdrop-filter: blur(8px);
+}
+
+/* 黑白灰滚动条样式 */
+.preset-dropdown-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 3px;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.preset-dropdown-list::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.preset-dropdown-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid var(--canvas-border-subtle, #2a2a2a);
+}
+
+.preset-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.preset-dropdown-item:hover {
+  background: var(--canvas-bg-secondary, #252525);
+}
+
+.preset-dropdown-item.active {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.preset-dropdown-item.action-item {
+  color: var(--canvas-accent-primary, #3b82f6);
+  font-weight: 500;
+}
+
+.preset-dropdown-item.action-item:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.preset-dropdown-divider {
+  height: 1px;
+  background: var(--canvas-border, rgba(255, 255, 255, 0.1));
+  margin: 4px 0;
+  pointer-events: none;
+}
+
+.preset-item-main {
+  display: flex;
+  align-items: center;
+}
+
+.preset-item-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--canvas-text-primary, #fff);
+}
+
+.preset-item-desc {
+  margin-top: 4px;
   font-size: 11px;
   color: var(--canvas-text-secondary, #a0a0a0);
   line-height: 1.4;

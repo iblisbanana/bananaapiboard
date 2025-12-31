@@ -65,6 +65,8 @@ const MAX_CONCURRENT_THUMBNAILS = 2 // 最大同时处理数
 
 // 图片加载失败的记录
 const imageLoadErrors = ref({})
+// 缩略图加载失败，需要回退到原图的记录
+const thumbnailFallback = ref({})
 
 // 删除确认弹窗状态
 const showDeleteConfirm = ref(false)
@@ -231,11 +233,36 @@ async function loadHistory(forceRefresh = false) {
   }
 }
 
-// 获取预览内容
+// 为七牛云URL添加缩略图处理参数（仅用于列表缩略图，加快加载速度）
+function getQiniuThumbnailUrl(url, width = 400) {
+  if (!url || typeof url !== 'string') return url
+  
+  // 判断是否是七牛云URL
+  if (url.includes('files.nananobanana.cn') ||  
+      url.includes('qiniucdn.com') || 
+      url.includes('clouddn.com') || 
+      url.includes('qnssl.com') ||
+      url.includes('qbox.me')) {
+    // 添加七牛云图片处理参数
+    // imageView2/2/w/400 - 等比缩放，宽度限制为400px
+    // format/webp - 转WebP格式，体积更小
+    const separator = url.includes('?') ? '|' : '?'
+    return `${url}${separator}imageView2/2/w/${width}/format/webp`
+  }
+  
+  return url
+}
+
+// 获取预览内容（仅用于列表缩略图显示，下载和全屏预览使用原图）
 function getPreviewContent(item) {
   switch (item.type) {
     case 'image':
-      return item.thumbnail_url || item.url
+      // 如果缩略图加载失败过，直接使用原图
+      if (thumbnailFallback.value[item.id]) {
+        return item.thumbnail_url || item.url
+      }
+      // 列表使用小缩略图(400px宽)，加快加载速度
+      return getQiniuThumbnailUrl(item.thumbnail_url || item.url, 400)
     case 'video':
       return item.thumbnail_url || item.url
     case 'audio':
@@ -767,12 +794,21 @@ function isPortraitVideo(item) {
   return false
 }
 
-// 处理图片加载错误
+// 处理图片加载错误（支持回退到原图）
 function handleImageError(item) {
+  // 如果还没有尝试过回退到原图，先尝试回退
+  if (!thumbnailFallback.value[item.id]) {
+    console.log('[HistoryPanel] 缩略图加载失败，回退到原图:', item.id)
+    thumbnailFallback.value[item.id] = true
+    // 不设置 imageLoadErrors，让它重新加载原图
+    return
+  }
+  // 原图也加载失败了，显示占位符
+  console.log('[HistoryPanel] 原图也加载失败:', item.id)
   imageLoadErrors.value[item.id] = true
 }
 
-// 检查图片是否加载失败
+// 检查图片是否加载失败（原图也失败才显示占位符）
 function hasImageError(item) {
   return imageLoadErrors.value[item.id] === true
 }
@@ -1022,6 +1058,7 @@ onUnmounted(() => {
                   <template v-if="item.type === 'image'">
                     <img 
                       v-if="getPreviewContent(item) && !hasImageError(item)" 
+                      :key="`img-${item.id}-${thumbnailFallback[item.id] ? 'fallback' : 'thumb'}`"
                       :src="getPreviewContent(item)" 
                       :alt="item.name"
                       class="card-image"

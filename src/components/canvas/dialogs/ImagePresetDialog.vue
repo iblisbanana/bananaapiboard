@@ -1,9 +1,9 @@
 <template>
   <Teleport to="body">
-    <div v-if="isOpen" class="custom-preset-dialog-overlay" @click="handleOverlayClick">
-      <div class="custom-preset-dialog" @click.stop>
+    <div v-if="isOpen" class="image-preset-dialog-overlay" @click="handleOverlayClick">
+      <div class="image-preset-dialog" @click.stop>
         <div class="dialog-header">
-          <h2 class="dialog-title">{{ editMode ? '编辑自定义预设' : '新建自定义预设' }}</h2>
+          <h2 class="dialog-title">{{ editMode ? '编辑图像预设' : '新建图像预设' }}</h2>
           <button class="close-btn" @click="close">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -21,36 +21,70 @@
               v-model="formData.name"
               type="text"
               class="form-input"
-              placeholder="例如：专业文案助手"
-              maxlength="100"
+              placeholder="例如：5秒后预测、角色三视图"
+              maxlength="50"
               @input="validateName"
             />
             <div class="form-hint">
-              <span :class="{ 'text-warning': formData.name.length > 80 }">
-                {{ formData.name.length }}/100 字符
+              <span :class="{ 'text-warning': formData.name.length > 40 }">
+                {{ formData.name.length }}/50 字符
               </span>
               <span v-if="nameError" class="text-error">{{ nameError }}</span>
             </div>
           </div>
 
-          <!-- 系统提示词 -->
+          <!-- 预设描述 -->
           <div class="form-group">
             <label class="form-label">
-              系统提示词 <span class="required">*</span>
+              预设描述 <span class="optional">(可选)</span>
+            </label>
+            <input
+              v-model="formData.description"
+              type="text"
+              class="form-input"
+              placeholder="简要描述预设的用途"
+              maxlength="100"
+            />
+            <div class="form-hint">
+              <span>{{ formData.description?.length || 0 }}/100 字符</span>
+            </div>
+          </div>
+
+          <!-- 提示词模板 -->
+          <div class="form-group">
+            <label class="form-label">
+              提示词模板 <span class="required">*</span>
             </label>
             <textarea
-              v-model="formData.systemPrompt"
+              v-model="formData.prompt"
               class="form-textarea"
-              placeholder="输入系统提示词，定义AI的行为和角色...&#10;&#10;例如：你是一个专业的文案策划师，擅长创作吸引人的营销文案。你的任务是根据用户提供的产品信息，生成引人入胜、富有创意的文案内容。"
-              rows="10"
+              placeholder="输入图像生成的提示词模板...&#10;&#10;例如：Generate a character turnaround sheet showing the character from front, side, and back views..."
+              rows="8"
               maxlength="6000"
-              @input="validateSystemPrompt"
+              @input="validatePrompt"
             ></textarea>
             <div class="form-hint">
-              <span :class="{ 'text-warning': formData.systemPrompt.length > 5500, 'text-error': formData.systemPrompt.length > 5900 }">
-                {{ formData.systemPrompt.length }}/6000 字符
+              <span :class="{ 'text-warning': formData.prompt.length > 5500, 'text-error': formData.prompt.length > 5900 }">
+                {{ formData.prompt.length }}/6000 字符
               </span>
               <span v-if="promptError" class="text-error">{{ promptError }}</span>
+            </div>
+          </div>
+
+          <!-- 分类选择 -->
+          <div class="form-group">
+            <label class="form-label">分类</label>
+            <div class="category-grid">
+              <button
+                v-for="cat in categories"
+                :key="cat.value"
+                type="button"
+                class="category-btn"
+                :class="{ active: formData.category === cat.value }"
+                @click="formData.category = cat.value"
+              >
+                {{ cat.label }}
+              </button>
             </div>
           </div>
         </div>
@@ -100,10 +134,24 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'submit', 'temp-use'])
 
+// 分类选项
+const categories = [
+  { value: 'general', label: '通用' },
+  { value: 'character', label: '角色' },
+  { value: 'landscape', label: '风景' },
+  { value: 'style', label: '艺术风格' },
+  { value: 'anime', label: '动漫' },
+  { value: 'realistic', label: '写实' },
+  { value: 'abstract', label: '抽象' },
+  { value: 'other', label: '其他' }
+]
+
 // 表单数据
 const formData = ref({
   name: '',
-  systemPrompt: ''
+  description: '',
+  prompt: '',
+  category: 'general'
 })
 
 // 验证错误
@@ -117,9 +165,9 @@ const editMode = computed(() => !!props.preset)
 // 表单验证
 const isFormValid = computed(() => {
   return formData.value.name.trim().length > 0 &&
-         formData.value.name.trim().length <= 100 &&
-         formData.value.systemPrompt.trim().length > 0 &&
-         formData.value.systemPrompt.length <= 6000 &&
+         formData.value.name.trim().length <= 50 &&
+         formData.value.prompt.trim().length > 0 &&
+         formData.value.prompt.length <= 6000 &&
          !nameError.value &&
          !promptError.value
 })
@@ -129,20 +177,20 @@ function validateName() {
   const name = formData.value.name.trim()
   if (!name) {
     nameError.value = '预设名称不能为空'
-  } else if (name.length > 100) {
-    nameError.value = '预设名称最长100字符'
+  } else if (name.length > 50) {
+    nameError.value = '预设名称最长50字符'
   } else {
     nameError.value = ''
   }
 }
 
-// 验证系统提示词
-function validateSystemPrompt() {
-  const prompt = formData.value.systemPrompt
+// 验证提示词
+function validatePrompt() {
+  const prompt = formData.value.prompt
   if (!prompt.trim()) {
-    promptError.value = '系统提示词不能为空'
+    promptError.value = '提示词不能为空'
   } else if (prompt.length > 6000) {
-    promptError.value = '系统提示词最长6000字符'
+    promptError.value = '提示词最长6000字符'
   } else {
     promptError.value = ''
   }
@@ -153,12 +201,16 @@ watch(() => props.preset, (newPreset) => {
   if (newPreset) {
     formData.value = {
       name: newPreset.name || '',
-      systemPrompt: newPreset.systemPrompt || ''
+      description: newPreset.description || '',
+      prompt: newPreset.prompt || '',
+      category: newPreset.category || 'general'
     }
   } else {
     formData.value = {
       name: '',
-      systemPrompt: ''
+      description: '',
+      prompt: '',
+      category: 'general'
     }
   }
   nameError.value = ''
@@ -190,7 +242,9 @@ async function handleSubmit() {
   try {
     await emit('submit', {
       name: formData.value.name.trim(),
-      systemPrompt: formData.value.systemPrompt
+      description: formData.value.description.trim(),
+      prompt: formData.value.prompt,
+      category: formData.value.category
     })
   } finally {
     isSubmitting.value = false
@@ -202,14 +256,14 @@ function handleTempUse() {
   if (!isFormValid.value) return
 
   emit('temp-use', {
-    systemPrompt: formData.value.systemPrompt
+    prompt: formData.value.prompt
   })
   close()
 }
 </script>
 
 <style scoped>
-.custom-preset-dialog-overlay {
+.image-preset-dialog-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -232,7 +286,7 @@ function handleTempUse() {
   }
 }
 
-.custom-preset-dialog {
+.image-preset-dialog {
   background: var(--canvas-bg-primary, #1e1e1e);
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -311,6 +365,12 @@ function handleTempUse() {
   color: #ef4444;
 }
 
+.optional {
+  color: var(--canvas-text-secondary, #a0a0a0);
+  font-weight: 400;
+  font-size: 12px;
+}
+
 .form-input,
 .form-textarea {
   width: 100%;
@@ -338,7 +398,7 @@ function handleTempUse() {
 
 .form-textarea {
   resize: vertical;
-  min-height: 200px;
+  min-height: 160px;
   line-height: 1.5;
 }
 
@@ -358,6 +418,35 @@ function handleTempUse() {
 
 .text-error {
   color: #ef4444;
+}
+
+/* 分类按钮网格 */
+.category-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-btn {
+  padding: 6px 12px;
+  background: var(--canvas-bg-secondary, #2a2a2a);
+  border: 1px solid var(--canvas-border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--canvas-text-secondary, #a0a0a0);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.category-btn:hover {
+  border-color: var(--primary-color, #8b5cf6);
+  color: var(--canvas-text-primary, #ffffff);
+}
+
+.category-btn.active {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: var(--primary-color, #8b5cf6);
+  color: var(--primary-color, #8b5cf6);
 }
 
 .dialog-footer {

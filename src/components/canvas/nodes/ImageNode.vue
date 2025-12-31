@@ -14,6 +14,9 @@ import { generateImageFromText, generateImageFromImage, pollTaskStatus, uploadIm
 import { getApiUrl, getModelDisplayName, isModelEnabled, getAvailableImageModels, getTenantHeaders } from '@/config/tenant'
 import { useI18n } from '@/i18n'
 import { showAlert, showInsufficientPointsDialog } from '@/composables/useCanvasDialog'
+import { getImagePresets, incrementPresetUseCount, createImagePreset, updateImagePreset } from '@/api/canvas/image-presets'
+import ImagePresetDialog from '../dialogs/ImagePresetDialog.vue'
+import ImagePresetManager from '../dialogs/ImagePresetManager.vue'
 
 const { t } = useI18n()
 
@@ -46,12 +49,34 @@ const localLabel = ref(props.data.label || 'Image')
 const isGenerating = ref(false)
 const errorMessage = ref('')
 const promptText = ref(props.data.prompt || '')
+const promptTextareaRef = ref(null) // 提示词输入框引用
 const isDragOver = ref(false) // 拖拽悬停状态
+
+// 文本框拖动自动滚动相关状态
+const isTextareaDragging = ref(false)
+const dragStartY = ref(0)
+const autoScrollTimer = ref(null)
+const autoScrollSpeed = ref(0)
 const isRefDragOver = ref(false) // 参考图片区域拖拽状态
 const refDragCounter = ref(0) // 参考图片拖拽计数器
 
 // 模型下拉框状态
 const isModelDropdownOpen = ref(false)
+
+// 预设选择器状态
+const isPresetDropdownOpen = ref(false)
+const presetDropdownUp = ref(true) // 预设下拉方向
+const selectedPreset = ref('')
+const tenantPresets = ref([]) // 租户全局预设
+const userPresets = ref([]) // 用户自定义预设
+const presetSelectorRef = ref(null)
+
+// 图像预设对话框和管理器
+const showImagePresetDialog = ref(false)
+const showImagePresetManager = ref(false)
+const editingImagePreset = ref(null)
+const imagePresetManagerRef = ref(null)
+const tempCustomPrompt = ref('') // 临时自定义提示词
 
 // 图片列表拖拽排序状态
 const dragSortIndex = ref(-1)
@@ -132,14 +157,256 @@ function handleDropdownWheel(event) {
 function handleModelDropdownClickOutside(event) {
   // 检查点击是否在下拉框外
   const dropdown = event.target.closest('.model-selector-custom')
+  const presetDropdown = event.target.closest('.preset-selector-custom')
   if (!dropdown) {
     isModelDropdownOpen.value = false
   }
+  if (!presetDropdown) {
+    isPresetDropdownOpen.value = false
+  }
+}
+
+// ========== 预设管理功能 ==========
+
+// 加载图像预设
+async function loadImagePresets() {
+  try {
+    const data = await getImagePresets()
+    tenantPresets.value = data.tenant || []
+    userPresets.value = data.user || []
+    console.log('[ImageNode] 图像预设已加载:', { tenant: tenantPresets.value.length, user: userPresets.value.length })
+  } catch (error) {
+    console.error('[ImageNode] 加载图像预设失败:', error)
+  }
+}
+
+// 可用预设列表
+const availablePresets = computed(() => {
+  const presets = []
+
+  // 1. 添加"无预设"选项
+  presets.push({
+    id: '',
+    name: '无预设',
+    prompt: '',
+    type: 'none'
+  })
+
+  // 2. 添加租户全局预设
+  if (tenantPresets.value.length > 0) {
+    presets.push(...tenantPresets.value.map(p => ({
+      id: `tenant-${p.id}`,
+      name: p.name,
+      prompt: p.prompt,
+      description: p.description,
+      type: 'tenant-global',
+      _rawId: p.id
+    })))
+  }
+
+  // 3. 添加用户自定义预设
+  if (userPresets.value.length > 0) {
+    presets.push({ id: 'divider-user', type: 'divider', label: '我的预设' })
+    presets.push(...userPresets.value.map(p => ({
+      id: `user-${p.id}`,
+      name: `📝 ${p.name}`,
+      prompt: p.prompt,
+      description: p.description,
+      type: 'user-custom',
+      _rawId: p.id
+    })))
+  }
+
+  // 4. 添加临时自定义（如果正在使用）
+  if (selectedPreset.value === 'temp-custom') {
+    if (presets.length > 0) {
+      presets.push({ id: 'divider-temp', type: 'divider' })
+    }
+    presets.push({
+      id: 'temp-custom',
+      name: '📌 临时自定义',
+      type: 'temp-custom'
+    })
+  }
+
+  // 5. 添加操作选项
+  presets.push({ id: 'divider-actions', type: 'divider' })
+  presets.push({
+    id: 'action-new',
+    name: '➕ 新建自定义预设',
+    type: 'action'
+  })
+  presets.push({
+    id: 'action-manage',
+    name: '⚙️ 管理我的预设',
+    type: 'action'
+  })
+
+  return presets
+})
+
+// 当前选中预设的显示名称
+const selectedPresetLabel = computed(() => {
+  if (!selectedPreset.value) {
+    return '无预设'
+  }
+
+  // 检查是否是用户自定义预设
+  if (selectedPreset.value.startsWith('user-')) {
+    const userPreset = userPresets.value.find(p => `user-${p.id}` === selectedPreset.value)
+    if (userPreset) return `📝 ${userPreset.name}`
+  }
+
+  // 检查是否是临时自定义
+  if (selectedPreset.value === 'temp-custom') {
+    return '📌 临时自定义'
+  }
+
+  const preset = availablePresets.value.find(p => p.id === selectedPreset.value)
+  return preset ? preset.name : '无预设'
+})
+
+// 当前选中预设的提示词（用于拼接）
+const currentPresetPrompt = computed(() => {
+  if (!selectedPreset.value) return ''
+  
+  // 如果是临时自定义，返回临时提示词
+  if (selectedPreset.value === 'temp-custom') {
+    return tempCustomPrompt.value
+  }
+  
+  const preset = availablePresets.value.find(p => p.id === selectedPreset.value)
+  return preset?.prompt || ''
+})
+
+// 检测下拉菜单方向（基于元素位置和屏幕空间）
+function checkDropdownDirection(element, dropdownHeight = 300) {
+  if (!element) return true // 默认向上
+  const rect = element.getBoundingClientRect()
+  const spaceAbove = rect.top
+  const spaceBelow = window.innerHeight - rect.bottom
+  // 如果下方空间足够或下方空间比上方大，则向下弹出
+  return spaceBelow < dropdownHeight && spaceAbove > spaceBelow
+}
+
+// 切换预设下拉菜单
+function togglePresetDropdown(event) {
+  event?.stopPropagation()
+  if (!isPresetDropdownOpen.value) {
+    presetDropdownUp.value = checkDropdownDirection(presetSelectorRef.value, 350)
+  }
+  isPresetDropdownOpen.value = !isPresetDropdownOpen.value
+  isModelDropdownOpen.value = false
+}
+
+// 选择预设
+function selectPreset(presetId) {
+  // 处理操作类型的选项
+  if (presetId === 'action-new') {
+    openImagePresetDialog()
+    isPresetDropdownOpen.value = false
+    return
+  }
+
+  if (presetId === 'action-manage') {
+    openImagePresetManager()
+    return
+  }
+
+  // 忽略分隔线
+  if (presetId?.startsWith('divider-')) {
+    return
+  }
+
+  const preset = availablePresets.value.find(p => p.id === presetId)
+  if (!preset || preset.type === 'divider') return
+
+  selectedPreset.value = presetId
+  isPresetDropdownOpen.value = false
+
+  // 增加使用次数（异步，不等待）
+  if (preset._rawId) {
+    incrementPresetUseCount(preset._rawId)
+  }
+
+  console.log('[ImageNode] 已选择预设:', preset.name, '提示词:', preset.prompt)
+}
+
+// ========== 图像预设管理功能 ==========
+
+// 打开自定义预设对话框（新建）
+function openImagePresetDialog() {
+  editingImagePreset.value = null
+  showImagePresetDialog.value = true
+}
+
+// 打开自定义预设对话框（编辑）
+function editImagePreset(preset) {
+  editingImagePreset.value = preset
+  showImagePresetDialog.value = true
+  showImagePresetManager.value = false
+}
+
+// 提交图像预设（保存并使用）
+async function handleImagePresetSubmit(data) {
+  try {
+    if (editingImagePreset.value) {
+      // 更新现有预设
+      await updateImagePreset(editingImagePreset.value.id, data)
+      console.log('[ImageNode] 图像预设已更新')
+    } else {
+      // 创建新预设
+      const result = await createImagePreset(data)
+      console.log('[ImageNode] 图像预设已创建')
+
+      // 自动选择新创建的预设
+      selectedPreset.value = `user-${result.id}`
+    }
+
+    // 重新加载预设列表
+    await loadImagePresets()
+
+    // 如果预设管理器打开，刷新它
+    if (imagePresetManagerRef.value) {
+      imagePresetManagerRef.value.loadPresets()
+    }
+
+    // 关闭对话框
+    showImagePresetDialog.value = false
+  } catch (error) {
+    console.error('[ImageNode] 保存图像预设失败:', error)
+    alert(error.message || '保存失败，请重试')
+  }
+}
+
+// 临时使用自定义提示词（不保存）
+function handleImagePresetTempUse(data) {
+  tempCustomPrompt.value = data.prompt
+  selectedPreset.value = 'temp-custom'
+  console.log('[ImageNode] 使用临时自定义提示词')
+}
+
+// 打开预设管理器
+function openImagePresetManager() {
+  showImagePresetManager.value = true
+  isPresetDropdownOpen.value = false
+}
+
+// 从管理器中选择预设
+function handlePresetSelect(preset) {
+  selectedPreset.value = `user-${preset.id}`
+  showImagePresetManager.value = false
 }
 
 // 组件挂载时添加全局点击事件监听
 onMounted(() => {
   document.addEventListener('click', handleModelDropdownClickOutside)
+  // 加载图像预设
+  loadImagePresets()
+  // 初始化时调整文本框高度（如果有预设文本）
+  nextTick(() => {
+    autoResizeTextarea()
+  })
 })
 
 // 组件卸载时移除监听
@@ -720,6 +987,10 @@ watch(() => props.selected, (isSelected) => {
       console.log('[ImageNode] 同步选中状态到 store:', props.id)
       canvasStore.selectNode(props.id)
     }
+    // 节点选中时，自动调整文本框高度以适应已有文本
+    nextTick(() => {
+      autoResizeTextarea()
+    })
   }
 }, { immediate: true })
 
@@ -1563,19 +1834,34 @@ async function handleGenerate() {
   const upstreamPrompt = getUpstreamPrompt()
   const userPrompt = promptText.value.trim()
   
-  // 拼接提示词：上游提示词 + 用户输入的提示词
-  // 如果两者都有，用换行符连接；否则使用其中一个
-  let finalPrompt = ''
+  // 获取预设的提示词（如果有选择预设）
+  const presetPrompt = currentPresetPrompt.value
+  
+  // 拼接提示词：上游提示词 + 用户输入的提示词 + 预设提示词
+  // 预设提示词附加在最后，用逗号分隔
+  let basePrompt = ''
   if (upstreamPrompt && userPrompt) {
-    finalPrompt = `${upstreamPrompt}\n${userPrompt}`
+    basePrompt = `${upstreamPrompt}\n${userPrompt}`
   } else {
-    finalPrompt = upstreamPrompt || userPrompt
+    basePrompt = upstreamPrompt || userPrompt
+  }
+  
+  // 将预设提示词拼接到后面
+  let finalPrompt = basePrompt
+  if (presetPrompt) {
+    if (basePrompt) {
+      finalPrompt = `${basePrompt}, ${presetPrompt}`
+    } else {
+      finalPrompt = presetPrompt
+    }
   }
   
   console.log('[ImageNode] 生成参数:', {
     userPrompt,
     upstreamPrompt,
+    presetPrompt,
     finalPrompt,
+    selectedPreset: selectedPreset.value,
     model: selectedModel.value,
     imageSize: imageSize.value,
     count: selectedCount.value,
@@ -1789,6 +2075,121 @@ function handleKeyDown(event) {
     handleGenerate()
   }
 }
+
+// 自动调整文本框高度
+function autoResizeTextarea() {
+  const textarea = promptTextareaRef.value
+  if (!textarea) return
+  
+  // 重置高度以获取正确的 scrollHeight
+  textarea.style.height = 'auto'
+  
+  // 计算最小高度 (2行约48px) 和最大高度 (8行约200px)
+  const minHeight = 48
+  const maxHeight = 200
+  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight))
+  
+  textarea.style.height = newHeight + 'px'
+}
+
+// 监听 promptText 变化，自动调整高度
+watch(promptText, () => {
+  nextTick(() => {
+    autoResizeTextarea()
+  })
+})
+
+// 文本框拖动自动滚动功能
+const isAutoScrolling = ref(false) // 是否正在自动滚动（用于显示光标）
+
+function startTextareaAutoScroll(event) {
+  const textarea = promptTextareaRef.value
+  if (!textarea) return
+  
+  // 只响应左键
+  if (event.button !== 0) return
+  
+  isTextareaDragging.value = true
+  dragStartY.value = event.clientY
+  
+  document.addEventListener('mousemove', handleTextareaDragMove)
+  document.addEventListener('mouseup', stopTextareaAutoScroll)
+}
+
+function handleTextareaDragMove(event) {
+  if (!isTextareaDragging.value) return
+  
+  const textarea = promptTextareaRef.value
+  if (!textarea) return
+  
+  const deltaY = event.clientY - dragStartY.value
+  const threshold = 10 // 移动超过10px才开始滚动
+  
+  if (Math.abs(deltaY) > threshold) {
+    // 计算滚动速度，拖动越远速度越快（最大每帧滚动8px）
+    const speed = Math.min(Math.abs(deltaY - threshold) * 0.15, 8)
+    autoScrollSpeed.value = deltaY > 0 ? speed : -speed
+    
+    // 设置自动滚动状态，改变光标
+    if (!isAutoScrolling.value) {
+      isAutoScrolling.value = true
+      document.body.style.cursor = 'all-scroll'
+      textarea.style.cursor = 'all-scroll'
+    }
+    
+    // 启动自动滚动定时器
+    if (!autoScrollTimer.value) {
+      autoScrollTimer.value = setInterval(() => {
+        if (textarea && autoScrollSpeed.value !== 0) {
+          textarea.scrollTop += autoScrollSpeed.value
+        }
+      }, 16) // 约60fps
+    }
+  } else {
+    // 在阈值内，停止滚动并恢复光标
+    autoScrollSpeed.value = 0
+    if (isAutoScrolling.value) {
+      isAutoScrolling.value = false
+      document.body.style.cursor = ''
+      textarea.style.cursor = ''
+    }
+  }
+}
+
+function stopTextareaAutoScroll() {
+  isTextareaDragging.value = false
+  autoScrollSpeed.value = 0
+  
+  // 恢复光标
+  if (isAutoScrolling.value) {
+    isAutoScrolling.value = false
+    document.body.style.cursor = ''
+    const textarea = promptTextareaRef.value
+    if (textarea) {
+      textarea.style.cursor = ''
+    }
+  }
+  
+  if (autoScrollTimer.value) {
+    clearInterval(autoScrollTimer.value)
+    autoScrollTimer.value = null
+  }
+  
+  document.removeEventListener('mousemove', handleTextareaDragMove)
+  document.removeEventListener('mouseup', stopTextareaAutoScroll)
+}
+
+// 组件卸载时清理定时器和光标状态
+onUnmounted(() => {
+  if (autoScrollTimer.value) {
+    clearInterval(autoScrollTimer.value)
+    autoScrollTimer.value = null
+  }
+  // 恢复光标状态
+  if (isAutoScrolling.value) {
+    document.body.style.cursor = ''
+  }
+})
 
 // 开始调整尺寸
 function handleResizeStart(handle, event) {
@@ -2742,11 +3143,16 @@ async function handleDrop(event) {
       <!-- 提示词输入 -->
       <div class="prompt-section">
         <textarea
+          ref="promptTextareaRef"
           v-model="promptText"
           class="prompt-input"
           placeholder="描述你想要生成的内容，并在下方调整生成参数。(按下Enter 生成，Shift+Enter 换行)"
           rows="2"
           @keydown="handleKeyDown"
+          @input="autoResizeTextarea"
+          @focus="autoResizeTextarea"
+          @wheel.stop
+          @mousedown="startTextareaAutoScroll"
         ></textarea>
       </div>
       
@@ -2800,6 +3206,44 @@ async function handleDrop(event) {
                 {{ ratio.label }}
               </option>
             </select>
+          </div>
+          
+          <!-- 预设选择器 -->
+          <div class="preset-selector-custom" ref="presetSelectorRef" @click.stop>
+            <div class="preset-selector-trigger" @click="togglePresetDropdown">
+              <span class="preset-icon">◈</span>
+              <span class="preset-name">{{ selectedPresetLabel }}</span>
+              <span class="select-arrow" :class="{ 'arrow-up': isPresetDropdownOpen }">▾</span>
+            </div>
+            
+            <!-- 预设下拉列表 -->
+            <Transition name="dropdown-fade">
+              <div v-if="isPresetDropdownOpen" class="preset-dropdown-list" :class="{ 'dropdown-up': presetDropdownUp, 'dropdown-down': !presetDropdownUp }" @wheel.stop>
+                <div
+                  v-for="preset in availablePresets"
+                  :key="preset.id"
+                  :class="{
+                    'preset-dropdown-item': preset.type !== 'divider',
+                    'preset-dropdown-divider': preset.type === 'divider',
+                    'preset-action': preset.type === 'action',
+                    'active': selectedPreset === preset.id
+                  }"
+                  @click="selectPreset(preset.id)"
+                >
+                  <template v-if="preset.type !== 'divider'">
+                    <div class="preset-item-main">
+                      <span class="preset-item-label">{{ preset.name }}</span>
+                    </div>
+                    <div v-if="preset.description" class="preset-item-desc">
+                      {{ preset.description }}
+                    </div>
+                  </template>
+                  <template v-else>
+                    <span class="divider-label">{{ preset.label }}</span>
+                  </template>
+                </div>
+              </div>
+            </Transition>
           </div>
           
           <!-- 尺寸切换（根据模型配置显示） -->
@@ -2871,6 +3315,26 @@ async function handleDrop(event) {
       </Transition>
     </Teleport>
   </div>
+
+  <!-- 图像预设对话框 -->
+  <ImagePresetDialog
+    :isOpen="showImagePresetDialog"
+    :preset="editingImagePreset"
+    @close="showImagePresetDialog = false"
+    @submit="handleImagePresetSubmit"
+    @temp-use="handleImagePresetTempUse"
+  />
+
+  <!-- 图像预设管理器 -->
+  <ImagePresetManager
+    ref="imagePresetManagerRef"
+    :isOpen="showImagePresetManager"
+    @close="showImagePresetManager = false"
+    @create="openImagePresetDialog"
+    @edit="editImagePreset"
+    @refresh="loadImagePresets"
+    @select="handlePresetSelect"
+  />
 </template>
 
 <style scoped>
@@ -3567,19 +4031,54 @@ async function handleDrop(event) {
 }
 
 .prompt-section {
-  padding: 12px;
+  padding: 16px 12px;
   border-bottom: 1px solid var(--canvas-border-subtle, #2a2a2a);
 }
 
 .prompt-input {
   width: 100%;
+  min-height: 48px;
+  max-height: 200px;
   background: transparent;
   border: none;
   outline: none;
   color: var(--canvas-text-primary, #fff);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   resize: none;
+  overflow-y: auto;
+  transition: height 0.15s ease;
+  padding: 4px 0;
+}
+
+/* 提示词框滚动条样式 - 黑白灰风格 */
+.prompt-input::-webkit-scrollbar {
+  width: 6px;
+}
+
+.prompt-input::-webkit-scrollbar-track {
+  background: rgba(60, 60, 60, 0.3);
+  border-radius: 3px;
+}
+
+.prompt-input::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.6);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+.prompt-input::-webkit-scrollbar-thumb:hover {
+  background: rgba(180, 180, 180, 0.8);
+}
+
+.prompt-input::-webkit-scrollbar-thumb:active {
+  background: rgba(200, 200, 200, 0.9);
+}
+
+/* Firefox 滚动条样式 */
+.prompt-input {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 150, 150, 0.6) rgba(60, 60, 60, 0.3);
 }
 
 .prompt-input::placeholder {
@@ -3800,8 +4299,154 @@ async function handleDrop(event) {
   border-radius: 4px;
   -webkit-appearance: none;
   -moz-appearance: none;
+}
+
+/* 预设选择器样式 */
+.preset-selector-custom {
+  position: relative;
+}
+
+.preset-selector-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--canvas-bg-tertiary, #1a1a1a);
+  border: 1px solid var(--canvas-border-subtle, #2a2a2a);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.preset-selector-trigger:hover {
+  border-color: var(--canvas-border-active, #4a4a4a);
+}
+
+.preset-icon {
+  font-size: 14px;
+  color: #888;
+}
+
+.preset-name {
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.preset-dropdown-list {
+  position: absolute;
+  left: 0;
+  min-width: 220px;
+  max-height: 350px;
+  overflow-y: auto;
+  background: rgba(20, 20, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  backdrop-filter: blur(8px);
+}
+
+/* 向上展开（默认） */
+.preset-dropdown-list.dropdown-up {
+  bottom: calc(100% + 4px);
+  top: auto;
+}
+
+/* 向下展开 */
+.preset-dropdown-list.dropdown-down {
+  top: calc(100% + 4px);
+  bottom: auto;
+}
+
+/* 滚动条样式 */
+.preset-dropdown-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 3px;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.preset-dropdown-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.preset-dropdown-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.preset-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.preset-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.preset-dropdown-item.active {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.preset-dropdown-divider {
+  padding: 6px 12px;
+  pointer-events: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.divider-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.preset-item-main {
+  display: flex;
+  align-items: center;
+}
+
+.preset-item-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--canvas-text-primary, #fff);
+}
+
+.preset-item-desc {
+  margin-top: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   appearance: none;
   padding-right: 2px;
+}
+
+/* 操作选项样式 */
+.preset-dropdown-item.preset-action {
+  color: var(--primary-color, #8b5cf6);
+}
+
+.preset-dropdown-item.preset-action:hover {
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.preset-dropdown-item.preset-action .preset-item-label {
+  color: var(--primary-color, #8b5cf6);
 }
 
 .ratio-select-input option {
