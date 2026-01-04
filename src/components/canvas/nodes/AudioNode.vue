@@ -1231,15 +1231,15 @@ function handleSpeedDropdownClickOutside(event) {
         />
         
         <!-- 有音频时显示播放器 -->
-        <div 
-          v-if="hasAudio" 
+        <div
+          v-if="hasAudio"
           class="audio-output-wrapper"
           @mouseenter="handleMouseEnter"
           @mouseleave="handleMouseLeave"
           @wheel.prevent="handleWheel"
         >
           <!-- 隐藏的 audio 元素 -->
-          <audio 
+          <audio
             ref="audioRef"
             :src="audioUrl"
             @timeupdate="handleTimeUpdate"
@@ -1248,7 +1248,7 @@ function handleSpeedDropdownClickOutside(event) {
             @pause="handlePause"
             @ended="handleEnded"
           />
-          
+
           <!-- 音量指示器 -->
           <div v-if="showVolumeIndicator" class="volume-indicator">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -1258,14 +1258,14 @@ function handleSpeedDropdownClickOutside(event) {
             </svg>
             <span class="volume-value">{{ Math.round(volume * 100) }}%</span>
           </div>
-          
+
           <!-- 音频可视化区域 -->
           <div class="audio-visual">
             <div class="audio-wave">
               <span v-for="i in 7" :key="i" :class="{ active: isPlaying }"></span>
             </div>
           </div>
-          
+
           <!-- 播放控制 -->
           <div class="audio-controls">
             <button class="play-btn" @click="togglePlay">
@@ -1277,21 +1277,21 @@ function handleSpeedDropdownClickOutside(event) {
                 <path d="M8 5v14l11-7z"/>
               </svg>
             </button>
-            
+
             <!-- 进度条 -->
             <div class="progress-bar" @click="handleProgressClick">
               <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
             </div>
-            
+
             <!-- 时间显示 -->
             <div class="time-display">
               {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
             </div>
           </div>
-          
+
           <!-- 文件名 -->
           <div class="audio-title">{{ audioTitle }}</div>
-          
+
         </div>
         
         <!-- 生成中状态 -->
@@ -1485,20 +1485,36 @@ function handleSpeedDropdownClickOutside(event) {
       
       <!-- 有音频时的面板 -->
       <div v-else class="audio-info-panel">
-        <div class="info-header">
-          <span class="info-title">{{ audioTitle }}</span>
-          <button class="reupload-btn" @click.stop="handleReupload">重新生成</button>
+        <div class="audio-info-header">
+          <span class="audio-info-title">{{ audioTitle }}</span>
         </div>
-        <div class="quick-actions-row">
-          <button class="action-chip" @click.stop="handleLipSync">
-            <span>◐</span> 对口型
-          </button>
-          <button class="action-chip" @click.stop="handleAudioToVideo">
-            <span>▶</span> 生视频
-          </button>
-          <button class="action-chip" @click.stop="handleAudioToText">
-            <span>✎</span> 提文案
-          </button>
+        <div class="audio-actions-row">
+          <div class="audio-actions-left">
+            <button class="audio-action-btn" @click.stop="handleLipSync">
+              <span class="action-icon">◐</span>
+              <span class="action-text">对口型</span>
+            </button>
+            <button class="audio-action-btn" @click.stop="handleAudioToVideo">
+              <span class="action-icon">▶</span>
+              <span class="action-text">生视频</span>
+            </button>
+            <button class="audio-action-btn" @click.stop="handleAudioToText">
+              <span class="action-icon">✎</span>
+              <span class="action-text">提文案</span>
+            </button>
+          </div>
+          <div class="audio-actions-right">
+            <!-- 重新生成按钮 - 蓝色圆形icon -->
+            <button
+              class="audio-regenerate-btn"
+              @click.stop="handleReupload"
+              title="重新生成"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -2575,70 +2591,97 @@ function handleSpeedDropdownClickOutside(event) {
 
 /* ===== 有音频时的信息面板 ===== */
 .audio-info-panel {
-  padding: 16px 20px;
+  padding: 0;
 }
 
-.info-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+.audio-info-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--canvas-border-subtle, #2a2a2a);
 }
 
-.info-title {
+.audio-info-title {
   font-size: 14px;
   color: #ffffff;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  margin-right: 12px;
 }
 
-.reupload-btn {
-  padding: 6px 14px;
-  background: transparent;
-  border: 1px solid #333333;
-  border-radius: 6px;
-  color: #888888;
+.audio-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  gap: 16px;
+}
+
+.audio-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.audio-actions-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 快捷操作按钮 - 模仿图像节点的模型选择器样式 */
+.audio-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--canvas-bg-tertiary, #1a1a1a);
+  border: 1px solid var(--canvas-border-subtle, #2a2a2a);
+  border-radius: 8px;
+  color: #ffffff;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
 }
 
-.reupload-btn:hover {
-  border-color: #555555;
+.audio-action-btn:hover {
+  border-color: var(--canvas-border-active, #4a4a4a);
+}
+
+.audio-action-btn .action-icon {
+  font-size: 14px;
+}
+
+.audio-action-btn .action-text {
+  font-size: 13px;
+}
+
+/* 重新生成按钮 - 蓝色圆形icon */
+.audio-regenerate-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--canvas-accent-primary, #3b82f6);
+  border: none;
+  border-radius: 50%;
   color: #ffffff;
-}
-
-.quick-actions-row {
-  display: flex;
-  gap: 8px;
-}
-
-.action-chip {
+  cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background: #252525;
-  border: none;
-  border-radius: 20px;
-  color: #cccccc;
-  font-size: 13px;
-  cursor: pointer;
+  justify-content: center;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
-.action-chip:hover {
-  background: #333333;
-  color: #ffffff;
+.audio-regenerate-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 16px rgba(59, 130, 246, 0.5);
 }
 
-.action-chip span:first-child {
-  font-size: 14px;
+.audio-regenerate-btn:active {
+  transform: scale(0.95);
 }
 
 /* 下拉动画 */

@@ -49,6 +49,16 @@ const showPreview = ref(false)
 const previewItem = ref(null)
 const previewVideoRef = ref(null)
 
+// 音频可视化状态
+const audioRef = ref(null)
+const audioVisualizerRef = ref(null)
+let audioContext = null
+let analyser = null
+let audioSource = null
+let animationId = null
+let particles = []
+let audioSourceConnected = false // 标记音频源是否已连接
+
 // 预览图片缩放和平移状态
 const previewScale = ref(1)
 const previewTranslate = ref({ x: 0, y: 0 })
@@ -266,7 +276,8 @@ function getPreviewContent(item) {
     case 'video':
       return item.thumbnail_url || item.url
     case 'audio':
-      return null
+      // 音频使用封面图片作为缩略图
+      return item.thumbnail_url || null
     default:
       return null
   }
@@ -442,6 +453,302 @@ function closePreview() {
   previewItem.value = null
   previewScale.value = 1
   previewTranslate.value = { x: 0, y: 0 }
+  // 完全销毁音频可视化（因为下次打开的是新的 audio 元素）
+  destroyAudioVisualizer()
+}
+
+// ========== 音频可视化 ==========
+
+// 粒子类
+class Particle {
+  constructor(x, y, canvas) {
+    this.x = x
+    this.y = y
+    this.canvas = canvas
+    this.baseY = y
+    this.vx = (Math.random() - 0.5) * 2
+    this.vy = (Math.random() - 0.5) * 2
+    this.radius = Math.random() * 3 + 1
+    this.baseRadius = this.radius
+    this.life = 1
+    this.decay = Math.random() * 0.01 + 0.005
+    // 蓝色系渐变
+    this.hue = 200 + Math.random() * 40 // 200-240 蓝色范围
+    this.saturation = 80 + Math.random() * 20
+    this.lightness = 50 + Math.random() * 20
+  }
+
+  update(intensity) {
+    // 根据音频强度影响运动
+    const boost = intensity * 3
+    this.x += this.vx * (1 + boost)
+    this.y += this.vy * (1 + boost) + Math.sin(Date.now() * 0.003 + this.x * 0.01) * intensity * 2
+    
+    // 脉冲效果
+    this.radius = this.baseRadius * (1 + intensity * 2)
+    
+    // 边界反弹
+    if (this.x < 0 || this.x > this.canvas.width) this.vx *= -1
+    if (this.y < 0 || this.y > this.canvas.height) this.vy *= -1
+    
+    this.life -= this.decay * (1 - intensity * 0.5)
+    return this.life > 0
+  }
+
+  draw(ctx, intensity) {
+    const alpha = this.life * (0.6 + intensity * 0.4)
+    const glow = intensity * 15
+    
+    // 发光效果
+    ctx.shadowBlur = glow + 10
+    ctx.shadowColor = `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, ${alpha})`
+    
+    ctx.beginPath()
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2)
+    ctx.fillStyle = `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, ${alpha})`
+    ctx.fill()
+    
+    ctx.shadowBlur = 0
+  }
+}
+
+// 初始化音频可视化
+function initAudioVisualizer() {
+  if (!audioRef.value || !audioVisualizerRef.value) return
+  
+  const canvas = audioVisualizerRef.value
+  const ctx = canvas.getContext('2d')
+  
+  // 设置 canvas 大小
+  const rect = canvas.parentElement.getBoundingClientRect()
+  canvas.width = rect.width || 400
+  canvas.height = rect.height || 300
+  
+  try {
+    // 如果已有 audioContext 且状态正常，复用它
+    if (!audioContext || audioContext.state === 'closed') {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      audioSourceConnected = false
+    }
+    
+    // 恢复暂停的音频上下文
+    if (audioContext.state === 'suspended') {
+      audioContext.resume()
+    }
+    
+    // 创建分析器
+    if (!analyser) {
+      analyser = audioContext.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.8
+    }
+    
+    // 连接音频源（每个 audio 元素只能连接一次）
+    if (!audioSourceConnected && audioRef.value) {
+      try {
+        audioSource = audioContext.createMediaElementSource(audioRef.value)
+        audioSource.connect(analyser)
+        analyser.connect(audioContext.destination)
+        audioSourceConnected = true
+      } catch (e) {
+        // 如果音频源已经连接过，忽略错误
+        console.warn('[AudioVisualizer] 音频源连接:', e.message)
+        audioSourceConnected = true
+      }
+    }
+    
+    // 初始化粒子
+    particles = []
+    for (let i = 0; i < 80; i++) {
+      particles.push(new Particle(
+        Math.random() * canvas.width,
+        Math.random() * canvas.height,
+        canvas
+      ))
+    }
+    
+    // 开始动画
+    animateVisualizer(ctx, canvas)
+  } catch (e) {
+    console.error('[AudioVisualizer] 初始化失败:', e)
+  }
+}
+
+// 动画循环
+function animateVisualizer(ctx, canvas) {
+  if (!analyser) return
+  
+  const bufferLength = analyser.frequencyBinCount
+  const dataArray = new Uint8Array(bufferLength)
+  
+  function draw() {
+    animationId = requestAnimationFrame(draw)
+    
+    analyser.getByteFrequencyData(dataArray)
+    
+    // 计算平均音频强度
+    let sum = 0
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i]
+    }
+    const average = sum / bufferLength / 255
+    
+    // 低频、中频、高频分析
+    const bass = dataArray.slice(0, bufferLength / 4).reduce((a, b) => a + b, 0) / (bufferLength / 4) / 255
+    const mid = dataArray.slice(bufferLength / 4, bufferLength / 2).reduce((a, b) => a + b, 0) / (bufferLength / 4) / 255
+    const treble = dataArray.slice(bufferLength / 2).reduce((a, b) => a + b, 0) / (bufferLength / 2) / 255
+    
+    // 清除画布（带拖尾效果）
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    
+    // 在低音强时添加新粒子
+    if (bass > 0.5 && particles.length < 150) {
+      for (let i = 0; i < 3; i++) {
+        particles.push(new Particle(
+          canvas.width / 2 + (Math.random() - 0.5) * 100,
+          canvas.height / 2 + (Math.random() - 0.5) * 100,
+          canvas
+        ))
+      }
+    }
+    
+    // 绘制中心波形圆环
+    drawWaveCircle(ctx, canvas, dataArray, bufferLength, average)
+    
+    // 更新和绘制粒子
+    particles = particles.filter(p => {
+      const alive = p.update(average)
+      if (alive) p.draw(ctx, average)
+      return alive
+    })
+    
+    // 保持最小粒子数
+    while (particles.length < 50) {
+      particles.push(new Particle(
+        Math.random() * canvas.width,
+        Math.random() * canvas.height,
+        canvas
+      ))
+    }
+    
+    // 绘制频谱条
+    drawSpectrumBars(ctx, canvas, dataArray, bufferLength)
+  }
+  
+  draw()
+}
+
+// 绘制中心波形圆环
+function drawWaveCircle(ctx, canvas, dataArray, bufferLength, intensity) {
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  const baseRadius = Math.min(canvas.width, canvas.height) * 0.15
+  
+  ctx.beginPath()
+  
+  for (let i = 0; i < bufferLength; i++) {
+    const angle = (i / bufferLength) * Math.PI * 2
+    const amplitude = dataArray[i] / 255
+    const radius = baseRadius + amplitude * 40
+    
+    const x = centerX + Math.cos(angle) * radius
+    const y = centerY + Math.sin(angle) * radius
+    
+    if (i === 0) {
+      ctx.moveTo(x, y)
+    } else {
+      ctx.lineTo(x, y)
+    }
+  }
+  
+  ctx.closePath()
+  
+  // 渐变填充
+  const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, baseRadius + 50)
+  gradient.addColorStop(0, `rgba(59, 130, 246, ${0.1 + intensity * 0.3})`)
+  gradient.addColorStop(0.5, `rgba(99, 102, 241, ${0.05 + intensity * 0.2})`)
+  gradient.addColorStop(1, 'rgba(139, 92, 246, 0)')
+  
+  ctx.fillStyle = gradient
+  ctx.fill()
+  
+  ctx.strokeStyle = `rgba(59, 130, 246, ${0.5 + intensity * 0.5})`
+  ctx.lineWidth = 2
+  ctx.shadowBlur = 20
+  ctx.shadowColor = 'rgba(59, 130, 246, 0.8)'
+  ctx.stroke()
+  ctx.shadowBlur = 0
+}
+
+// 绘制底部频谱条
+function drawSpectrumBars(ctx, canvas, dataArray, bufferLength) {
+  const barCount = 32
+  const barWidth = canvas.width / barCount - 2
+  const barSpacing = 2
+  
+  for (let i = 0; i < barCount; i++) {
+    const dataIndex = Math.floor(i * bufferLength / barCount)
+    const value = dataArray[dataIndex] / 255
+    const barHeight = value * canvas.height * 0.3
+    
+    const x = i * (barWidth + barSpacing)
+    const y = canvas.height - barHeight
+    
+    // 渐变颜色
+    const gradient = ctx.createLinearGradient(x, y + barHeight, x, y)
+    gradient.addColorStop(0, `rgba(59, 130, 246, ${0.3 + value * 0.4})`)
+    gradient.addColorStop(0.5, `rgba(99, 102, 241, ${0.4 + value * 0.4})`)
+    gradient.addColorStop(1, `rgba(139, 92, 246, ${0.5 + value * 0.5})`)
+    
+    ctx.fillStyle = gradient
+    
+    // 圆角矩形
+    const radius = Math.min(barWidth / 2, 4)
+    ctx.beginPath()
+    ctx.moveTo(x + radius, y)
+    ctx.lineTo(x + barWidth - radius, y)
+    ctx.quadraticCurveTo(x + barWidth, y, x + barWidth, y + radius)
+    ctx.lineTo(x + barWidth, y + barHeight)
+    ctx.lineTo(x, y + barHeight)
+    ctx.lineTo(x, y + radius)
+    ctx.quadraticCurveTo(x, y, x + radius, y)
+    ctx.closePath()
+    ctx.fill()
+  }
+}
+
+// 清理音频可视化（关闭预览时调用）
+function cleanupAudioVisualizer() {
+  if (animationId) {
+    cancelAnimationFrame(animationId)
+    animationId = null
+  }
+  // 不关闭 audioContext，只停止动画
+  // audioContext 和 audioSource 保持，因为同一个 audio 元素只能连接一次
+  particles = []
+}
+
+// 完全销毁音频可视化（组件卸载时调用）
+function destroyAudioVisualizer() {
+  cleanupAudioVisualizer()
+  if (audioContext && audioContext.state !== 'closed') {
+    audioContext.close().catch(() => {})
+  }
+  audioContext = null
+  analyser = null
+  audioSource = null
+  audioSourceConnected = false
+}
+
+// 处理音频播放
+function handleAudioPlay() {
+  if (audioContext && audioContext.state === 'suspended') {
+    audioContext.resume()
+  }
+  if (!animationId) {
+    initAudioVisualizer()
+  }
 }
 
 // ========== 右键菜单 ==========
@@ -928,6 +1235,9 @@ onUnmounted(() => {
     resizeObserver = null
   }
   
+  // 完全销毁音频可视化
+  destroyAudioVisualizer()
+  
   // 清理 RAF
   if (scrollRAF) {
     cancelAnimationFrame(scrollRAF)
@@ -1087,10 +1397,24 @@ onUnmounted(() => {
                     </div>
                   </template>
                   
-                  <!-- 音频占位符 -->
-                  <div v-else-if="item.type === 'audio'" class="card-placeholder audio">
-                    <span class="placeholder-icon">♪</span>
-                  </div>
+                  <!-- 音频预览 -->
+                  <template v-else-if="item.type === 'audio'">
+                    <img 
+                      v-if="getPreviewContent(item)" 
+                      :src="getPreviewContent(item)" 
+                      :alt="item.name || item.title"
+                      class="card-image"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <div v-else class="card-placeholder audio">
+                      <span class="placeholder-icon">♪</span>
+                    </div>
+                    <!-- 音频标题覆盖层 -->
+                    <div v-if="item.title || item.name" class="audio-title-overlay">
+                      <span class="audio-title">{{ item.title || item.name }}</span>
+                    </div>
+                  </template>
                   
                   <!-- 其他类型占位符 -->
                   <div v-else class="card-placeholder">
@@ -1230,12 +1554,22 @@ onUnmounted(() => {
             
             <!-- 音频预览 -->
             <div v-else-if="previewItem.type === 'audio'" class="preview-audio">
-              <div class="audio-icon">♪</div>
+              <div class="audio-visualizer-container">
+                <canvas ref="audioVisualizerRef" class="audio-visualizer-canvas"></canvas>
+                <div class="audio-center-icon">♪</div>
+              </div>
+              <div class="audio-info" v-if="previewItem.title || previewItem.name">
+                <span class="audio-title-text">{{ previewItem.title || previewItem.name }}</span>
+              </div>
               <audio 
+                ref="audioRef"
                 :src="previewItem.url"
+                crossorigin="anonymous"
                 controls
                 autoplay
                 class="audio-player"
+                @play="handleAudioPlay"
+                @loadeddata="initAudioVisualizer"
               ></audio>
             </div>
           </div>
@@ -1701,6 +2035,42 @@ onUnmounted(() => {
   background: linear-gradient(135deg, #1a5f3d 0%, #1a1a1c 100%);
 }
 
+/* 音频标题覆盖层 */
+.audio-title-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+  padding: 24px 8px 8px;
+  pointer-events: none;
+}
+
+.audio-title {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 音频卡片小图标 */
+.history-card:has(> .audio-title-overlay)::before {
+  content: '♪';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 2px 6px;
+  border-radius: 4px;
+  z-index: 2;
+}
+
 /* 竖屏视频的占位符 */
 .history-card.portrait-video .card-placeholder {
   aspect-ratio: 9 / 16;
@@ -1991,21 +2361,75 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
-  padding: 40px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  gap: 20px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 16px;
+  min-width: 420px;
+  box-shadow: 0 0 40px rgba(59, 130, 246, 0.2);
 }
 
-.preview-audio .audio-icon {
-  font-size: 48px;
-  color: rgba(255, 255, 255, 0.4);
+.audio-visualizer-container {
+  position: relative;
+  width: 400px;
+  height: 280px;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.audio-visualizer-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.audio-center-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 32px;
+  color: rgba(59, 130, 246, 0.3);
+  pointer-events: none;
+  text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+.audio-info {
+  text-align: center;
+  padding: 0 16px;
+}
+
+.audio-title-text {
+  font-size: 16px;
+  font-weight: 500;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
 }
 
 .audio-player {
-  width: 320px;
+  width: 380px;
   max-width: 100%;
+  height: 40px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* 自定义音频播放器样式 */
+.audio-player::-webkit-media-controls-panel {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%);
+  border-radius: 20px;
+}
+
+.audio-player::-webkit-media-controls-play-button,
+.audio-player::-webkit-media-controls-mute-button {
+  filter: invert(1);
+}
+
+.audio-player::-webkit-media-controls-current-time-display,
+.audio-player::-webkit-media-controls-time-remaining-display {
+  color: #fff;
 }
 
 /* 底部信息和操作栏 */

@@ -1407,17 +1407,31 @@ async function handleFileDrop(event) {
           }
         })
       } else if (category === 'audio') {
-        // 音频节点 - 使用文本节点暂存音频信息（可扩展为专用音频节点）
+        // 音频节点 - 使用 Object URL，避免 base64 编码大文件导致性能问题
+        const objectUrl = URL.createObjectURL(file)
+        // 提取文件名（不含扩展名）作为节点标题
+        const fileName = file.name || '音频'
+        const displayName = fileName.replace(/\.[^/.]+$/, '') // 移除扩展名
+        
         canvasStore.addNode({
           id: nodeId,
-          type: 'text-input',
+          type: 'audio-input',
           position: { x: canvasX + offsetX, y: canvasY + offsetY },
           data: {
-            title: `🎵 ${file.name || '音频'}`,
-            text: `音频文件: ${file.name}`,
-            audioData: dataUrl
+            title: displayName,
+            label: displayName,
+            audioUrl: objectUrl,
+            status: 'success',
+            output: {
+              type: 'audio',
+              url: objectUrl
+            },
+            // 保存原始文件引用，用于后续上传
+            localFile: file,
+            isLocalAudio: true
           }
         })
+        console.log('[CanvasBoard] 音频文件已添加到画布:', displayName)
       }
       
       // 多文件时错开位置

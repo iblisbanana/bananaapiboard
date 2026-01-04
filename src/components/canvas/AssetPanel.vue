@@ -33,6 +33,16 @@ const showPreview = ref(false)
 const previewAsset = ref(null)
 const previewVideoRef = ref(null)
 
+// 音频可视化状态
+const audioRef = ref(null)
+const audioVisualizerRef = ref(null)
+let audioContext = null
+let analyser = null
+let audioSource = null
+let animationId = null
+let particles = []
+let audioSourceConnected = false
+
 // 编辑名称状态
 const editingNameAssetId = ref(null)
 const editingNameValue = ref('')
@@ -304,8 +314,225 @@ function handleAssetDoubleClick(asset) {
 
 // 关闭全屏预览
 function closePreview() {
+  destroyAudioVisualizer()
   showPreview.value = false
   previewAsset.value = null
+}
+
+// ========== 音频可视化 ==========
+
+// 粒子类
+class Particle {
+  constructor(canvas) {
+    this.canvas = canvas
+    this.reset()
+  }
+  
+  reset() {
+    const centerX = this.canvas.width / 2
+    const centerY = this.canvas.height / 2
+    const angle = Math.random() * Math.PI * 2
+    const distance = Math.random() * 80 + 60
+    
+    this.x = centerX + Math.cos(angle) * distance
+    this.y = centerY + Math.sin(angle) * distance
+    this.size = Math.random() * 4 + 2
+    this.speedX = (Math.random() - 0.5) * 2
+    this.speedY = (Math.random() - 0.5) * 2
+    this.life = 1
+    this.decay = Math.random() * 0.02 + 0.01
+    this.hue = Math.random() * 40 + 200 // 蓝色色调 200-240
+    this.brightness = Math.random() * 30 + 70
+  }
+  
+  update(intensity) {
+    this.x += this.speedX * (1 + intensity * 2)
+    this.y += this.speedY * (1 + intensity * 2)
+    this.life -= this.decay
+    
+    if (this.life <= 0) {
+      this.reset()
+    }
+  }
+  
+  draw(ctx) {
+    ctx.save()
+    ctx.globalAlpha = this.life * 0.8
+    ctx.fillStyle = `hsl(${this.hue}, 80%, ${this.brightness}%)`
+    ctx.shadowColor = `hsl(${this.hue}, 100%, 60%)`
+    ctx.shadowBlur = 15
+    ctx.beginPath()
+    ctx.arc(this.x, this.y, this.size * this.life, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+}
+
+// 初始化音频可视化
+function initAudioVisualizer() {
+  if (!audioRef.value || !audioVisualizerRef.value) return
+  
+  try {
+    // 创建新的 AudioContext
+    audioContext = new (window.AudioContext || window.webkitAudioContext)()
+    analyser = audioContext.createAnalyser()
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = 0.8
+    
+    // 连接音频源（只能连接一次）
+    if (!audioSourceConnected) {
+      audioSource = audioContext.createMediaElementSource(audioRef.value)
+      audioSource.connect(analyser)
+      analyser.connect(audioContext.destination)
+      audioSourceConnected = true
+    }
+    
+    // 初始化粒子
+    const canvas = audioVisualizerRef.value
+    particles = []
+    for (let i = 0; i < 50; i++) {
+      particles.push(new Particle(canvas))
+    }
+    
+    // 开始动画
+    animateVisualizer()
+  } catch (e) {
+    console.error('[AssetPanel] 音频可视化初始化失败:', e)
+  }
+}
+
+// 动画循环
+function animateVisualizer() {
+  if (!audioVisualizerRef.value || !analyser) return
+  
+  const canvas = audioVisualizerRef.value
+  const ctx = canvas.getContext('2d')
+  const width = canvas.width
+  const height = canvas.height
+  
+  // 获取频率数据
+  const bufferLength = analyser.frequencyBinCount
+  const dataArray = new Uint8Array(bufferLength)
+  analyser.getByteFrequencyData(dataArray)
+  
+  // 计算平均强度
+  let sum = 0
+  for (let i = 0; i < bufferLength; i++) {
+    sum += dataArray[i]
+  }
+  const avgIntensity = sum / bufferLength / 255
+  
+  // 清除画布
+  ctx.fillStyle = 'rgba(15, 15, 25, 0.2)'
+  ctx.fillRect(0, 0, width, height)
+  
+  // 绘制中心波形
+  drawWaveform(ctx, dataArray, width, height, avgIntensity)
+  
+  // 更新和绘制粒子
+  particles.forEach(particle => {
+    particle.update(avgIntensity)
+    particle.draw(ctx)
+  })
+  
+  // 绘制底部频谱
+  drawSpectrumBars(ctx, dataArray, width, height)
+  
+  animationId = requestAnimationFrame(animateVisualizer)
+}
+
+// 绘制波形
+function drawWaveform(ctx, dataArray, width, height, intensity) {
+  const centerX = width / 2
+  const centerY = height / 2
+  const radius = 50 + intensity * 30
+  const points = 32
+  
+  ctx.save()
+  ctx.strokeStyle = `hsla(210, 100%, 60%, ${0.6 + intensity * 0.4})`
+  ctx.lineWidth = 2
+  ctx.shadowColor = 'hsl(210, 100%, 60%)'
+  ctx.shadowBlur = 20
+  
+  ctx.beginPath()
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * Math.PI * 2
+    const dataIndex = Math.floor((i / points) * dataArray.length)
+    const amplitude = dataArray[dataIndex] / 255
+    const r = radius + amplitude * 40
+    
+    const x = centerX + Math.cos(angle) * r
+    const y = centerY + Math.sin(angle) * r
+    
+    if (i === 0) {
+      ctx.moveTo(x, y)
+    } else {
+      ctx.lineTo(x, y)
+    }
+  }
+  ctx.closePath()
+  ctx.stroke()
+  ctx.restore()
+}
+
+// 绘制频谱柱状图
+function drawSpectrumBars(ctx, dataArray, width, height) {
+  const barCount = 64
+  const barWidth = width / barCount - 2
+  const barSpacing = 2
+  
+  for (let i = 0; i < barCount; i++) {
+    const dataIndex = Math.floor((i / barCount) * dataArray.length)
+    const amplitude = dataArray[dataIndex] / 255
+    const barHeight = amplitude * 60
+    
+    const x = i * (barWidth + barSpacing)
+    const y = height - barHeight
+    
+    const hue = 210 + (i / barCount) * 40 // 蓝色到紫色渐变
+    ctx.fillStyle = `hsla(${hue}, 80%, 60%, ${0.3 + amplitude * 0.5})`
+    ctx.shadowColor = `hsl(${hue}, 100%, 60%)`
+    ctx.shadowBlur = 5
+    
+    ctx.fillRect(x, y, barWidth, barHeight)
+  }
+}
+
+// 清理音频可视化
+function cleanupAudioVisualizer() {
+  if (animationId) {
+    cancelAnimationFrame(animationId)
+    animationId = null
+  }
+  particles = []
+}
+
+// 完全销毁音频可视化（关闭预览时调用）
+function destroyAudioVisualizer() {
+  cleanupAudioVisualizer()
+  
+  if (audioContext) {
+    audioContext.close().catch(() => {})
+    audioContext = null
+  }
+  analyser = null
+  audioSource = null
+  audioSourceConnected = false
+}
+
+// 音频播放事件处理
+function handleAudioPlay() {
+  if (audioContext && audioContext.state === 'suspended') {
+    audioContext.resume()
+  }
+  if (!animationId && audioRef.value) {
+    initAudioVisualizer()
+  }
+}
+
+// 音频暂停事件处理
+function handleAudioPause() {
+  cleanupAudioVisualizer()
 }
 
 // 应用资产到画布
@@ -967,6 +1194,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('click', handleGlobalClick)
   window.removeEventListener('assets-updated', handleAssetsUpdated)
+  destroyAudioVisualizer()
 })
 </script>
 
@@ -1522,15 +1750,21 @@ onUnmounted(() => {
             
             <!-- 音频预览 -->
             <div v-else-if="previewAsset.type === 'audio'" class="preview-audio">
-              <div class="audio-visual">
+              <div class="audio-visualizer-container">
+                <canvas ref="audioVisualizerRef" class="audio-visualizer-canvas" width="400" height="300"></canvas>
                 <div class="audio-icon">♪</div>
-                <h3>{{ previewAsset.name }}</h3>
               </div>
+              <h3 class="audio-title">{{ previewAsset.name }}</h3>
               <audio 
+                ref="audioRef"
                 :src="previewAsset.url"
                 controls
                 autoplay
+                crossorigin="anonymous"
                 class="audio-player"
+                @play="handleAudioPlay"
+                @pause="handleAudioPause"
+                @ended="handleAudioPause"
               ></audio>
             </div>
           </div>
@@ -2716,30 +2950,53 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 32px;
-  padding: 48px 64px;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(167, 139, 250, 0.08) 100%);
-  border: 1px solid rgba(167, 139, 250, 0.2);
+  gap: 24px;
+  padding: 32px 48px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(139, 92, 246, 0.08) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.2);
   border-radius: 24px;
 }
 
-.audio-visual {
+.audio-visualizer-container {
+  position: relative;
+  width: 400px;
+  height: 300px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 16px;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(30, 64, 175, 0.3) 0%, rgba(15, 15, 25, 0.8) 70%);
+  border-radius: 16px;
+  overflow: hidden;
 }
 
-.audio-icon {
-  font-size: 64px;
-  color: rgba(167, 139, 250, 0.8);
+.audio-visualizer-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
 }
 
-.audio-visual h3 {
+.preview-audio .audio-icon {
+  position: relative;
+  z-index: 1;
+  font-size: 48px;
+  color: rgba(59, 130, 246, 0.6);
+  text-shadow: 0 0 30px rgba(59, 130, 246, 0.8);
+  animation: pulse-icon 2s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.1); opacity: 0.8; }
+}
+
+.audio-title {
   font-size: 18px;
   font-weight: 600;
   color: #fff;
   margin: 0;
+  text-align: center;
 }
 
 .audio-player {
