@@ -303,11 +303,31 @@ async function handleGenerate() {
         }
       })
       
+      let videoUrl = finalResult.video_url || finalResult.url
+      
+      // 如果不是七牛云 URL，延迟几秒再查询一次获取可能已上传的七牛云 URL
+      if (videoUrl && !isQiniuCdnUrl(videoUrl)) {
+        console.log('[VideoGen] 首次返回非七牛云URL，延迟3秒后再次查询...')
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        
+        try {
+          const { getVideoTaskStatus } = await import('@/api/canvas/nodes')
+          const updatedResult = await getVideoTaskStatus(result.task_id)
+          if (updatedResult.video_url && isQiniuCdnUrl(updatedResult.video_url)) {
+            videoUrl = updatedResult.video_url
+            console.log('[VideoGen] 获取到七牛云URL:', videoUrl.substring(0, 60))
+          }
+        } catch (e) {
+          console.warn('[VideoGen] 再次查询失败，使用原URL:', e.message)
+        }
+      }
+      
       canvasStore.updateNodeData(props.id, {
         status: 'success',
+        taskId: result.task_id,
         output: {
           type: 'video',
-          url: finalResult.video_url || finalResult.url
+          url: videoUrl
         }
       })
     } else if (result.video_url || result.url) {
@@ -358,56 +378,84 @@ function buildQiniuForceDownloadUrl(url, filename) {
   return `${url}${separator}attname=${encodeURIComponent(filename)}`
 }
 
-// 下载视频 - 统一使用 fetch + blob 方式强制下载
+// 下载视频 - 优先使用七牛云URL，对非七牛云URL使用后端代理
 async function downloadVideo() {
   if (!props.data.output?.url) return
   
-  const videoUrl = props.data.output.url
+  let videoUrl = props.data.output.url
   const filename = `video_${props.id || Date.now()}.mp4`
   
   console.log('[VideoGenNode] 开始下载:', { url: videoUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(videoUrl) })
   
+  // 如果不是七牛云URL，尝试再次查询获取七牛云URL
+  if (!isQiniuCdnUrl(videoUrl)) {
+    console.log('[VideoGenNode] 非七牛云URL，尝试获取最新URL...')
+    try {
+      const { getVideoTaskStatus } = await import('@/api/canvas/nodes')
+      // 从节点数据中找任务ID（如果有的话）
+      const taskId = props.data.taskId
+      if (taskId) {
+        const result = await getVideoTaskStatus(taskId)
+        if (result.video_url && isQiniuCdnUrl(result.video_url)) {
+          videoUrl = result.video_url
+          console.log('[VideoGenNode] 获取到七牛云URL:', videoUrl.substring(0, 60))
+          // 更新节点数据
+          canvasStore.updateNodeData(props.id, {
+            output: { ...props.data.output, url: videoUrl }
+          })
+        }
+      }
+    } catch (e) {
+      console.warn('[VideoGenNode] 获取七牛云URL失败:', e.message)
+    }
+  }
+  
   try {
-    // 统一使用 fetch + blob 方式强制下载（最可靠的方式）
-    // 七牛云 URL 支持跨域访问，可以直接 fetch
-    const fetchOptions = isQiniuCdnUrl(videoUrl) ? {} : { headers: getTenantHeaders() }
+    // 统一使用 fetch + blob 方式下载，确保文件名正确（包含 .mp4 后缀）
+    let fetchUrl = videoUrl
+    let fetchOptions = {}
     
-    const response = await fetch(videoUrl, fetchOptions)
+    if (isQiniuCdnUrl(videoUrl)) {
+      // 七牛云 URL：直接 fetch（七牛云支持 CORS）
+      console.log('[VideoGenNode] 使用七牛云直接下载')
+    } else {
+      // 非七牛云 URL：使用后端代理下载
+      console.log('[VideoGenNode] 使用后端代理下载')
+      const { getApiUrl } = await import('@/config/tenant')
+      fetchUrl = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl)}&name=${encodeURIComponent(filename)}`)
+      fetchOptions = { headers: getTenantHeaders() }
+    }
+    
+    const response = await fetch(fetchUrl, fetchOptions)
     
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
     
     const blob = await response.blob()
-    
-    // 创建 blob URL 并下载
     const blobUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = blobUrl
-    link.download = filename
+    link.download = filename  // fetch + blob 方式可以完全控制文件名
     link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     
     console.log('[VideoGenNode] 下载成功:', filename)
     
-    // 清理
     setTimeout(() => {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(blobUrl)
     }, 100)
   } catch (error) {
-    console.error('[VideoGenNode] fetch 下载失败:', error)
-    // 如果 fetch 失败（可能是跨域问题），回退到 attname 参数方式
-    const link = document.createElement('a')
-    const separator = videoUrl.includes('?') ? '&' : '?'
-    link.href = `${videoUrl}${separator}attname=${encodeURIComponent(filename)}`
-    link.download = filename
-    link.target = '_self'
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    console.error('[VideoGenNode] 下载失败:', error)
+    // 最后的回退：使用后端代理页面下载
+    try {
+      const { getApiUrl } = await import('@/config/tenant')
+      window.location.href = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl)}&name=${encodeURIComponent(filename)}`)
+    } catch (e) {
+      console.error('[VideoGenNode] 所有下载方式都失败:', e)
+    }
   }
 }
 

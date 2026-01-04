@@ -41,6 +41,7 @@ const localLabel = ref(props.data.label || 'Video')
 const isGenerating = ref(false)
 const errorMessage = ref('')
 const promptText = ref(props.data.prompt || '')
+const promptTextareaRef = ref(null)
 
 // 模型下拉框状态
 const isModelDropdownOpen = ref(false)
@@ -138,6 +139,35 @@ function handleModelDropdownClickOutside(event) {
 function handleDropdownWheel(event) {
   event.stopPropagation()
   // 允许滚动事件正常传播到下拉列表，阻止传播到画布
+}
+
+// 自动调整提示词文本框高度
+function autoResizeTextarea() {
+  const textarea = promptTextareaRef.value
+  if (!textarea) return
+  
+  // 重置高度以获取正确的 scrollHeight
+  textarea.style.height = 'auto'
+  
+  // 计算最小高度 (3行约63px) 和最大高度 (10行约210px)
+  const minHeight = 63
+  const maxHeight = 210
+  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight))
+  
+  textarea.style.height = newHeight + 'px'
+}
+
+// 处理提示词框滚轮事件（阻止冒泡，让滚轮作用于文本框滚动条）
+function handlePromptWheel(event) {
+  const textarea = promptTextareaRef.value
+  if (!textarea) return
+  
+  // 检查是否有内容需要滚动
+  const hasScroll = textarea.scrollHeight > textarea.clientHeight
+  if (hasScroll) {
+    // 阻止事件冒泡，让滚轮只作用于文本框
+    event.stopPropagation()
+  }
 }
 
 // 获取当前选中模型的显示名称
@@ -365,6 +395,11 @@ onMounted(() => {
   
   // 检查是否有已完成的后台任务需要恢复
   checkAndRestoreBackgroundTasks()
+  
+  // 初始化时调整文本框高度（如果有长文本）
+  nextTick(() => {
+    autoResizeTextarea()
+  })
 })
 
 onUnmounted(() => {
@@ -647,12 +682,17 @@ function getUpstreamData() {
   return { prompts, images }
 }
 
-// 监听继承数据变化，自动填充提示词
-watch(() => props.data.inheritedData, (newData) => {
-  if (newData?.type === 'text' && newData?.content && !promptText.value) {
-    promptText.value = newData.content
-  }
-}, { immediate: true })
+// 实时获取上游文本内容（用于显示在"上下文文字参考"区域）
+const upstreamTextContent = computed(() => {
+  const upstreamData = getUpstreamData()
+  if (upstreamData.prompts.length === 0) return ''
+  return upstreamData.prompts.join('\n\n---\n\n')
+})
+
+// 是否有上游文本（用于控制显示）
+const hasUpstreamText = computed(() => {
+  return upstreamTextContent.value.length > 0
+})
 
 // 积分消耗计算（从模型配置中读取）
 const pointsCost = computed(() => {
@@ -860,6 +900,22 @@ watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, prom
   }
 )
 
+// 监听 promptText 变化，自动调整文本框高度
+watch(promptText, () => {
+  nextTick(() => {
+    autoResizeTextarea()
+  })
+})
+
+// 监听节点选中状态，选中时恢复正确的文本框高度
+watch(() => props.selected, (isSelected) => {
+  if (isSelected) {
+    nextTick(() => {
+      autoResizeTextarea()
+    })
+  }
+})
+
 // 同步 label 变化
 watch(() => props.data.label, (newLabel) => {
   if (newLabel !== undefined && newLabel !== localLabel.value) {
@@ -918,10 +974,12 @@ function delay(ms) {
 // 判断是否是七牛云 CDN URL（公开可访问的 URL）
 function isQiniuCdnUrl(str) {
   if (!str || typeof str !== 'string') return false
-  return str.includes('files.nananobanana.cn') || 
-         str.includes('qncdn.') ||
-         str.includes('.qiniucdn.com') ||
-         str.includes('.qbox.me')
+  return str.includes('files.nananobanana.cn') ||  // 项目的七牛云 CDN 域名
+         str.includes('oss.nananobanana.cn') ||    // 项目的七牛云源站域名
+         str.includes('qiniucdn.com') || 
+         str.includes('clouddn.com') || 
+         str.includes('qnssl.com') ||
+         str.includes('qbox.me')
 }
 
 // 判断是否是需要重新上传的本地/相对路径 URL
@@ -2938,54 +2996,81 @@ function buildQiniuForceDownloadUrl(url, filename) {
 
 async function handleToolbarDownload() {
   // 使用原始 URL（可能是七牛云地址），而不是 normalizedVideoUrl（可能被转换为相对路径）
-  const originalUrl = props.data.output?.url
-  if (!originalUrl) return
+  let videoUrl = props.data.output?.url
+  if (!videoUrl) return
   
   const filename = `video_${props.id || Date.now()}.mp4`
   
-  console.log('[VideoNode] 开始下载:', { url: originalUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(originalUrl) })
+  console.log('[VideoNode] 开始下载:', { url: videoUrl.substring(0, 60), filename, isQiniu: isQiniuCdnUrl(videoUrl) })
+  
+  // 如果不是七牛云 URL，尝试查询获取七牛云 URL
+  if (!isQiniuCdnUrl(videoUrl)) {
+    console.log('[VideoNode] 非七牛云URL，尝试获取最新URL...')
+    const taskId = props.data.taskId || props.data.soraTaskId
+    if (taskId) {
+      try {
+        const { getVideoTaskStatus } = await import('@/api/canvas/nodes')
+        const result = await getVideoTaskStatus(taskId)
+        if (result.video_url && isQiniuCdnUrl(result.video_url)) {
+          videoUrl = result.video_url
+          console.log('[VideoNode] 获取到七牛云URL:', videoUrl.substring(0, 60))
+          // 更新节点数据
+          canvasStore.updateNodeData(props.id, {
+            output: { ...props.data.output, url: videoUrl }
+          })
+        }
+      } catch (e) {
+        console.warn('[VideoNode] 获取七牛云URL失败:', e.message)
+      }
+    }
+  }
   
   try {
-    // 统一使用 fetch + blob 方式强制下载（最可靠的方式）
-    // 七牛云 URL 支持跨域访问，可以直接 fetch
-    const fetchOptions = isQiniuCdnUrl(originalUrl) ? {} : { headers: getTenantHeaders() }
+    // 统一使用 fetch + blob 方式下载，确保文件名正确
+    let fetchUrl = videoUrl
+    let fetchOptions = {}
     
-    const response = await fetch(originalUrl, fetchOptions)
+    if (isQiniuCdnUrl(videoUrl)) {
+      // 七牛云 URL：直接 fetch（七牛云支持 CORS）
+      console.log('[VideoNode] 使用七牛云直接下载')
+    } else {
+      // 非七牛云 URL：使用后端代理下载
+      console.log('[VideoNode] 使用后端代理下载')
+      const { getApiUrl } = await import('@/config/tenant')
+      fetchUrl = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl)}&name=${encodeURIComponent(filename)}`)
+      fetchOptions = { headers: getTenantHeaders() }
+    }
+    
+    const response = await fetch(fetchUrl, fetchOptions)
     
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
     }
     
     const blob = await response.blob()
-    
-    // 创建 blob URL 并下载
     const blobUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = blobUrl
-    link.download = filename
+    link.download = filename  // fetch + blob 方式可以完全控制文件名
     link.style.display = 'none'
     document.body.appendChild(link)
     link.click()
     
     console.log('[VideoNode] 下载成功:', filename)
     
-    // 清理
     setTimeout(() => {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(blobUrl)
     }, 100)
   } catch (error) {
-    console.error('[VideoNode] fetch 下载失败:', error)
-    // 如果 fetch 失败（可能是跨域问题），回退到 attname 参数方式
-    const link = document.createElement('a')
-    const separator = originalUrl.includes('?') ? '&' : '?'
-    link.href = `${originalUrl}${separator}attname=${encodeURIComponent(filename)}`
-    link.download = filename
-    link.target = '_self'
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    console.error('[VideoNode] 下载失败:', error)
+    // 最后的回退：使用后端代理页面下载
+    try {
+      const { getApiUrl } = await import('@/config/tenant')
+      window.location.href = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl)}&name=${encodeURIComponent(filename)}`)
+    } catch (e) {
+      console.error('[VideoNode] 所有下载方式都失败:', e)
+    }
   }
 }
 
@@ -3356,14 +3441,29 @@ function handleToolbarPreview() {
         </div>
       </div>
       
+      <!-- 上下文文字参考（有上游文本时显示） -->
+      <div v-if="hasUpstreamText" class="context-reference-section">
+        <div class="context-reference-header">
+          <span class="context-reference-icon">📝</span>
+          <span class="context-reference-label">上下文文字参考</span>
+          <span class="context-reference-hint">来自上游节点</span>
+        </div>
+        <div class="context-reference-content">
+          {{ upstreamTextContent }}
+        </div>
+      </div>
+      
       <!-- 模式标签 + 提示词输入 -->
       <div class="prompt-section">
         <textarea
+          ref="promptTextareaRef"
           v-model="promptText"
           class="prompt-input"
-          placeholder="描述你想要生成的内容，并在下方调整生成参数。(按下Enter 生成，Shift+Enter 换行)"
+          :placeholder="hasUpstreamText ? '可选：添加额外的提示词（将与上下文合并）' : '描述你想要生成的内容，并在下方调整生成参数。(按下Enter 生成，Shift+Enter 换行)'"
           rows="3"
           @keydown="handleKeyDown"
+          @input="autoResizeTextarea"
+          @wheel="handlePromptWheel"
         ></textarea>
       </div>
       
@@ -4274,6 +4374,62 @@ function handleToolbarPreview() {
   pointer-events: none;
 }
 
+/* 上下文文字参考区域 */
+.context-reference-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--canvas-border-subtle, #2a2a2a);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.context-reference-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.context-reference-icon {
+  font-size: 14px;
+}
+
+.context-reference-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--canvas-accent-primary, #3b82f6);
+}
+
+.context-reference-hint {
+  font-size: 11px;
+  color: var(--canvas-text-tertiary, #666);
+  margin-left: auto;
+}
+
+.context-reference-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--canvas-text-secondary, #a0a0a0);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.context-reference-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.context-reference-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-reference-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
 .prompt-section {
   padding: 12px;
   border-bottom: 1px solid var(--canvas-border-subtle, #2a2a2a);
@@ -4288,6 +4444,8 @@ function handleToolbarPreview() {
 
 .prompt-input {
   width: 100%;
+  min-height: 63px;
+  max-height: 210px;
   background: transparent;
   border: none;
   outline: none;
@@ -4295,6 +4453,31 @@ function handleToolbarPreview() {
   font-size: 14px;
   line-height: 1.5;
   resize: none;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 150, 150, 0.6) rgba(60, 60, 60, 0.3);
+}
+
+.prompt-input::-webkit-scrollbar {
+  width: 6px;
+}
+
+.prompt-input::-webkit-scrollbar-track {
+  background: rgba(60, 60, 60, 0.3);
+  border-radius: 3px;
+}
+
+.prompt-input::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.6);
+  border-radius: 3px;
+}
+
+.prompt-input::-webkit-scrollbar-thumb:hover {
+  background: rgba(180, 180, 180, 0.8);
+}
+
+.prompt-input::-webkit-scrollbar-thumb:active {
+  background: rgba(200, 200, 200, 0.9);
 }
 
 .prompt-input::placeholder {
@@ -4916,12 +5099,47 @@ function handleToolbarPreview() {
   color: #a8a29e;
 }
 
+/* 上下文文字参考 - 白昼模式 */
+:root.canvas-theme-light .video-node .context-reference-section {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+:root.canvas-theme-light .video-node .context-reference-label {
+  color: #3b82f6;
+}
+
+:root.canvas-theme-light .video-node .context-reference-hint {
+  color: #a8a29e;
+}
+
+:root.canvas-theme-light .video-node .context-reference-content {
+  background: rgba(0, 0, 0, 0.03);
+  color: #57534e;
+}
+
+:root.canvas-theme-light .video-node .context-reference-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
 :root.canvas-theme-light .video-node .prompt-input {
   color: #1c1917;
+  scrollbar-color: rgba(120, 120, 120, 0.5) rgba(200, 200, 200, 0.3);
 }
 
 :root.canvas-theme-light .video-node .prompt-input::placeholder {
   color: #a8a29e;
+}
+
+:root.canvas-theme-light .video-node .prompt-input::-webkit-scrollbar-track {
+  background: rgba(200, 200, 200, 0.3);
+}
+
+:root.canvas-theme-light .video-node .prompt-input::-webkit-scrollbar-thumb {
+  background: rgba(120, 120, 120, 0.5);
+}
+
+:root.canvas-theme-light .video-node .prompt-input::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 100, 100, 0.7);
 }
 
 :root.canvas-theme-light .video-node .model-selector-trigger {
