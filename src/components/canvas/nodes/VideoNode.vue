@@ -2526,9 +2526,10 @@ function startHDTaskPolling(taskId) {
   
   // 延迟5秒后开始第一次轮询（给后端时间处理）
   setTimeout(() => {
-    poll()
-    // 设置定时器
+    // 先创建定时器，确保 stopHDTaskPolling 能正确清除
     hdPollingTimer.value = setInterval(poll, pollInterval)
+    // 再执行第一次轮询，如果任务已完成可以正确停止定时器
+    poll()
   }, 5000)
 }
 

@@ -263,9 +263,17 @@ async function submit() {
   }
 
   // 注册时检查邀请码要求
-  if (mode.value === 'register' && requireInviteCode.value && !inviteCode.value) {
-    error.value = '请输入邀请码，该租户已开启邀请码注册'
-    return
+  if (mode.value === 'register' && requireInviteCode.value) {
+    const trimmedCode = inviteCode.value?.trim() || ''
+    if (!trimmedCode) {
+      error.value = '请输入邀请码，该租户已开启邀请码注册'
+      return
+    }
+    // 验证邀请码格式（12位十六进制）
+    if (!/^[a-f0-9]{12}$/.test(trimmedCode)) {
+      error.value = '邀请码格式无效，应为12位字符'
+      return
+    }
   }
 
   loading.value = true

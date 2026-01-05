@@ -121,6 +121,7 @@ const {
   onNodeDragStop,
   onNodeDrag,
   onNodeClick,
+  onEdgeClick,
   onPaneClick,
   onPaneContextMenu,
   onNodeContextMenu,
@@ -132,7 +133,9 @@ const {
   setViewport,
   getViewport,
   project,
-  vueFlowRef
+  vueFlowRef,
+  addSelectedEdges,
+  removeSelectedNodes
 } = useVueFlow()
 
 // 缩放配置
@@ -404,6 +407,24 @@ onNodeClick((event) => {
   // 同时更新多选列表（单选情况）
   selectedNodeIds.value = [node.id]
   canvasStore.setSelectedNodeIds([node.id])
+  
+  // 关闭右键菜单
+  canvasStore.closeAllContextMenus()
+})
+
+// 处理连线点击 - 选中连线时取消节点选中
+onEdgeClick((event) => {
+  const edge = event.edge
+  console.log('[Canvas] 连线被点击:', edge.id)
+  
+  // 清除节点选中状态
+  removeSelectedNodes(getSelectedNodes.value)
+  selectedNodeIds.value = []
+  canvasStore.setSelectedNodeIds([])
+  canvasStore.clearSelection()
+  
+  // 确保连线被选中（VueFlow 会自动处理，但我们显式调用以确保）
+  addSelectedEdges([edge])
   
   // 关闭右键菜单
   canvasStore.closeAllContextMenus()
@@ -692,25 +713,18 @@ function handleMouseUp(event) {
 }
 
 // 删除选中的元素（节点和连线）
+// 原则：选中什么删什么，不多删
 function deleteSelectedElements() {
   const selectedNodes = getSelectedNodes.value
   const selectedEdges = getSelectedEdges.value
   
-  if (selectedNodes.length > 0) {
-    // 删除选中的节点
-    const nodeIds = selectedNodes.map(n => n.id)
-    removeNodes(nodeIds)
-    
-    // 同步到 store
-    nodeIds.forEach(id => {
-      canvasStore.removeNode(id)
-    })
-    
-    console.log(`[Canvas] 删除了 ${nodeIds.length} 个节点`)
-  }
+  console.log('[Canvas] 删除操作 - 当前选中状态:', {
+    selectedNodes: selectedNodes.map(n => n.id),
+    selectedEdges: selectedEdges.map(e => e.id)
+  })
   
-  if (selectedEdges.length > 0) {
-    // 删除选中的连线
+  // 如果只选中了连线（没有选中节点），只删除连线
+  if (selectedEdges.length > 0 && selectedNodes.length === 0) {
     const edgeIds = selectedEdges.map(e => e.id)
     removeEdges(edgeIds)
     
@@ -719,7 +733,41 @@ function deleteSelectedElements() {
       canvasStore.removeEdge(id)
     })
     
-    console.log(`[Canvas] 删除了 ${edgeIds.length} 条连线`)
+    console.log(`[Canvas] 只删除了 ${edgeIds.length} 条连线`)
+    return
+  }
+  
+  // 如果只选中了节点（没有选中连线），只删除节点
+  if (selectedNodes.length > 0 && selectedEdges.length === 0) {
+    const nodeIds = selectedNodes.map(n => n.id)
+    removeNodes(nodeIds)
+    
+    // 同步到 store
+    nodeIds.forEach(id => {
+      canvasStore.removeNode(id)
+    })
+    
+    console.log(`[Canvas] 只删除了 ${nodeIds.length} 个节点`)
+    return
+  }
+  
+  // 如果同时选中了节点和连线，都删除
+  if (selectedNodes.length > 0 && selectedEdges.length > 0) {
+    // 先删除连线
+    const edgeIds = selectedEdges.map(e => e.id)
+    removeEdges(edgeIds)
+    edgeIds.forEach(id => {
+      canvasStore.removeEdge(id)
+    })
+    
+    // 再删除节点
+    const nodeIds = selectedNodes.map(n => n.id)
+    removeNodes(nodeIds)
+    nodeIds.forEach(id => {
+      canvasStore.removeNode(id)
+    })
+    
+    console.log(`[Canvas] 删除了 ${nodeIds.length} 个节点和 ${edgeIds.length} 条连线`)
   }
 }
 
@@ -1573,6 +1621,8 @@ onUnmounted(() => {
       :prevent-scrolling="true"
       :elevate-nodes-on-select="false"
       :nodes-draggable="true"
+      :edges-selectable="true"
+      :multi-selection-key-code="'Control'"
       @viewport-change="handleViewportChange"
       @selection-change="handleSelectionChange"
       @edges-change="handleEdgesChange"

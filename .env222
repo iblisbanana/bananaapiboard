@@ -1,0 +1,32 @@
+# 后端 API 地址
+# 留空使用 Vite 代理访问本地后端（开发环境推荐）
+# 生产环境设置为实际的后端地址
+VITE_API_BASE=
+
+# 租户凭证（默认租户）
+VITE_TENANT_ID=default-tenant-001
+VITE_TENANT_KEY=DEFAULT-LICENSE-KEY-001
+
+# ============================================
+# 功能开关
+# ============================================
+
+# 视频生成功能
+# 说明：是否启用 AI 视频生成功能
+# 可选值：true（启用）/ false（禁用）
+VITE_ENABLE_VIDEO=true
+
+# 兑换券功能
+# 说明：是否启用兑换券/优惠券功能
+# 可选值：true（启用）/ false（禁用）
+VITE_ENABLE_VOUCHER=true
+
+# 邀请功能
+# 说明：是否启用用户邀请奖励功能
+# 可选值：true（启用）/ false（禁用）
+VITE_ENABLE_INVITE=true
+
+# 套餐功能
+# 说明：是否启用付费套餐购买功能
+# 可选值：true（启用）/ false（禁用）
+VITE_ENABLE_PACKAGES=true

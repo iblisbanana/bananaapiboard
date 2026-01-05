@@ -18,6 +18,8 @@ import { showAlert, showInsufficientPointsDialog } from '@/composables/useCanvas
 import { getImagePresets, incrementPresetUseCount, createImagePreset, updateImagePreset } from '@/api/canvas/image-presets'
 import ImagePresetDialog from '../dialogs/ImagePresetDialog.vue'
 import ImagePresetManager from '../dialogs/ImagePresetManager.vue'
+import ImageCropper from '../ImageCropper.vue'
+import { removeBackground } from '@imgly/background-removal'
 
 const { t } = useI18n()
 
@@ -402,6 +404,7 @@ function handlePresetSelect(preset) {
 // 组件挂载时添加全局点击事件监听
 onMounted(() => {
   document.addEventListener('click', handleModelDropdownClickOutside)
+  document.addEventListener('click', handleClickOutside)
   // 加载图像预设
   loadImagePresets()
   // 初始化时调整文本框高度（如果有预设文本）
@@ -413,6 +416,7 @@ onMounted(() => {
 // 组件卸载时移除监听
 onUnmounted(() => {
   document.removeEventListener('click', handleModelDropdownClickOutside)
+  document.removeEventListener('click', handleClickOutside)
 })
 
 // 检查是否有图片输入（用于判断文生图/图生图模式）
@@ -642,14 +646,315 @@ function handleToolbarEnhance() {
   enterEditMode('enhance') // 图像增强（待接入 AI API）
 }
 
+// 抠图状态
+const isRemovingBackground = ref(false)
+const removeBgProgress = ref(0)
+const showCutoutOptions = ref(false)
+const cutoutBgColor = ref('transparent') // 'transparent' | 'white' | 'green' | 'custom'
+const cutoutCustomColor = ref('#0066ff')
+
+// 预设背景颜色
+const cutoutBgPresets = [
+  { id: 'transparent', label: '透明', color: null, icon: '🔲' },
+  { id: 'white', label: '白底', color: '#ffffff', icon: '⬜' },
+  { id: 'green', label: '绿幕', color: '#00ff00', icon: '🟩' },
+  { id: 'custom', label: '自定义', color: null, icon: '🎨' }
+]
+
+// 点击抠图按钮 - 显示选项弹窗
 function handleToolbarCutout() {
   console.log('[ImageNode] 工具栏：抠图', props.id)
-  enterEditMode('cutout') // 智能抠图（待接入 AI API）
+  
+  const imageUrl = sourceImages.value?.[0] || props.data?.output?.url || props.data?.output?.urls?.[0]
+  if (!imageUrl) {
+    console.warn('[ImageNode] 抠图：没有图片')
+    showAlert('提示', '请先上传或生成图片')
+    return
+  }
+  
+  if (isRemovingBackground.value) {
+    console.warn('[ImageNode] 抠图：正在处理中')
+    return
+  }
+  
+  // 显示选项弹窗
+  showCutoutOptions.value = true
 }
+
+// 选择背景颜色并开始抠图
+async function startCutoutWithBg(bgType) {
+  cutoutBgColor.value = bgType
+  showCutoutOptions.value = false
+  
+  // 获取当前节点的图片URL
+  const imageUrl = sourceImages.value?.[0] || props.data?.output?.url || props.data?.output?.urls?.[0]
+  if (!imageUrl) return
+  
+  isRemovingBackground.value = true
+  removeBgProgress.value = 0
+  
+  try {
+    console.log('[ImageNode] 开始抠图处理，背景:', bgType)
+    
+    // 首先将图片转换为 Blob（避免跨域问题）
+    let imageInput = imageUrl
+    
+    if (imageUrl.startsWith('http') || imageUrl.startsWith('/')) {
+      try {
+        const response = await fetch(imageUrl)
+        const blob = await response.blob()
+        imageInput = blob
+      } catch (fetchError) {
+        console.warn('[ImageNode] 无法获取远程图片，尝试直接使用 URL:', fetchError)
+      }
+    }
+    
+    // 使用 @imgly/background-removal 进行抠图
+    const resultBlob = await removeBackground(imageInput, {
+      progress: (key, current, total) => {
+        if (total > 0) {
+          removeBgProgress.value = Math.round((current / total) * 100)
+        }
+        console.log('[ImageNode] 抠图进度:', key, `${current}/${total}`)
+      },
+      model: 'isnet_quint8',
+      debug: false
+    })
+    
+    // 根据选择的背景颜色处理结果
+    let finalDataUrl
+    let isTransparent = false
+    
+    if (bgType === 'transparent') {
+      // 透明背景 - 直接使用结果
+      const reader = new FileReader()
+      finalDataUrl = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsDataURL(resultBlob)
+      })
+      isTransparent = true
+    } else {
+      // 有颜色背景 - 合成背景色
+      const bgColor = bgType === 'custom' ? cutoutCustomColor.value : 
+                      bgType === 'white' ? '#ffffff' : 
+                      bgType === 'green' ? '#00ff00' : '#ffffff'
+      
+      finalDataUrl = await compositeWithBackground(resultBlob, bgColor)
+      isTransparent = false
+    }
+    
+    // 获取当前节点位置
+    const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+    if (!currentNode) {
+      throw new Error('找不到当前节点')
+    }
+    
+    // 在当前节点右侧创建新节点
+    const newNodeId = `cutout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    const newNodePosition = {
+      x: currentNode.position.x + 380,
+      y: currentNode.position.y
+    }
+    
+    // 创建新的图像节点
+    const bgLabel = bgType === 'transparent' ? '透明' : 
+                    bgType === 'white' ? '白底' : 
+                    bgType === 'green' ? '绿幕' : '自定义底'
+    
+    canvasStore.addNode({
+      id: newNodeId,
+      type: 'image',
+      position: newNodePosition,
+      data: {
+        label: `抠图-${bgLabel}`,
+        output: {
+          url: finalDataUrl,
+          urls: [finalDataUrl]
+        },
+        sourceNodeId: props.id,
+        isTransparent: isTransparent,
+        cutoutResult: true,
+        cutoutBgType: bgType
+      }
+    })
+    
+    console.log('[ImageNode] 抠图完成，已创建新节点:', newNodeId)
+    
+  } catch (error) {
+    console.error('[ImageNode] 抠图失败:', error)
+    showAlert('抠图失败', error.message || '处理过程中出现错误，请重试')
+  } finally {
+    isRemovingBackground.value = false
+    removeBgProgress.value = 0
+  }
+}
+
+// 将透明图片与背景色合成
+async function compositeWithBackground(blob, bgColor) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      const ctx = canvas.getContext('2d')
+      
+      // 填充背景色
+      ctx.fillStyle = bgColor
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      
+      // 绘制抠图结果
+      ctx.drawImage(img, 0, 0)
+      
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = reject
+    img.src = URL.createObjectURL(blob)
+  })
+}
+
+// 关闭抠图选项弹窗
+function closeCutoutOptions() {
+  showCutoutOptions.value = false
+}
+
+// 点击外部区域关闭抠图选项弹窗
+function handleClickOutside(event) {
+  if (showCutoutOptions.value) {
+    const popup = document.querySelector('.cutout-options-popup')
+    const trigger = document.querySelector('.toolbar-btn-wrapper .toolbar-btn')
+    if (popup && trigger && !popup.contains(event.target) && !trigger.contains(event.target)) {
+      closeCutoutOptions()
+    }
+  }
+}
+
 
 function handleToolbarExpand() {
   console.log('[ImageNode] 工具栏：扩图', props.id)
   enterEditMode('expand') // 智能扩图（待接入 AI API）
+}
+
+// 9宫格裁剪状态
+const isGridCropping = ref(false)
+
+// 独立裁剪组件状态
+const showCropper = ref(false)
+const cropperImageUrl = ref('')
+
+// 9宫格裁剪 - 将图片裁剪成9份并创建组
+async function handleToolbarGridCrop() {
+  console.log('[ImageNode] 工具栏：9宫格裁剪', props.id)
+  
+  // 获取当前节点的图片URL（优先使用sourceImages，然后是output）
+  const imageUrl = sourceImages.value?.[0] || props.data?.output?.url || props.data?.output?.urls?.[0]
+  if (!imageUrl) {
+    console.warn('[ImageNode] 9宫格裁剪：没有图片')
+    showAlert('提示', '请先上传或生成图片')
+    return
+  }
+  
+  if (isGridCropping.value) {
+    console.warn('[ImageNode] 9宫格裁剪：正在处理中')
+    return
+  }
+  
+  isGridCropping.value = true
+  
+  try {
+    // 加载图片
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+      img.src = imageUrl
+    })
+    
+    const imgWidth = img.naturalWidth
+    const imgHeight = img.naturalHeight
+    const cellWidth = Math.floor(imgWidth / 3)
+    const cellHeight = Math.floor(imgHeight / 3)
+    
+    // 裁剪成9份
+    const croppedImages = []
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const canvas = document.createElement('canvas')
+        canvas.width = cellWidth
+        canvas.height = cellHeight
+        const ctx = canvas.getContext('2d')
+        
+        ctx.drawImage(
+          img,
+          col * cellWidth,
+          row * cellHeight,
+          cellWidth,
+          cellHeight,
+          0,
+          0,
+          cellWidth,
+          cellHeight
+        )
+        
+        const dataUrl = canvas.toDataURL('image/png')
+        croppedImages.push({
+          index: row * 3 + col,
+          row,
+          col,
+          dataUrl
+        })
+      }
+    }
+    
+    // 计算节点布局参数
+    const nodeWidth = 300
+    const nodeHeight = 320
+    const gap = 20
+    
+    // 获取当前节点位置
+    const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+    const baseX = currentNode?.position?.x || 0
+    const baseY = currentNode?.position?.y || 0
+    const offsetX = 400 // 在原节点右侧
+    
+    // 创建9个图片节点
+    const newNodeIds = []
+    for (const item of croppedImages) {
+      const nodeId = `grid-crop-${Date.now()}-${item.index}`
+      const nodeX = baseX + offsetX + item.col * (nodeWidth + gap)
+      const nodeY = baseY + item.row * (nodeHeight + gap)
+      
+      canvasStore.addNode({
+        id: nodeId,
+        type: 'image',
+        position: { x: nodeX, y: nodeY },
+        data: {
+          label: `裁剪 ${item.row + 1}-${item.col + 1}`,
+          nodeRole: 'source',  // 必须设置为source才能显示sourceImages
+          sourceImages: [item.dataUrl],  // 使用sourceImages数组存储裁剪后的图片
+          isGenerated: true,
+          fromGridCrop: true  // 标记来源
+        }
+      })
+      
+      newNodeIds.push(nodeId)
+    }
+    
+    // 创建包含这9个节点的组
+    if (newNodeIds.length === 9) {
+      canvasStore.createGroup(newNodeIds, '9宫格裁剪')
+    }
+    
+    console.log('[ImageNode] 9宫格裁剪完成，创建了', newNodeIds.length, '个节点')
+    
+  } catch (error) {
+    console.error('[ImageNode] 9宫格裁剪失败:', error)
+  } finally {
+    isGridCropping.value = false
+  }
 }
 
 function handleToolbarAnnotate() {
@@ -659,7 +964,69 @@ function handleToolbarAnnotate() {
 
 function handleToolbarCrop() {
   console.log('[ImageNode] 工具栏：裁剪', props.id)
-  enterEditMode('crop') // 使用 vue-advanced-cropper 裁剪
+  
+  // 获取当前图片URL
+  const imageUrl = sourceImages.value?.[0] || props.data?.output?.url || props.data?.output?.urls?.[0]
+  if (!imageUrl) {
+    showAlert('提示', '请先上传或生成图片')
+    return
+  }
+  
+  // 打开新的裁剪组件
+  cropperImageUrl.value = imageUrl
+  showCropper.value = true
+}
+
+// 处理裁剪保存 - 创建新的图像节点
+function handleCropSave(result) {
+  console.log('[ImageNode] 裁剪/扩图完成', result)
+  
+  // 获取当前节点位置
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) {
+    showCropper.value = false
+    cropperImageUrl.value = ''
+    return
+  }
+  
+  // 在当前节点右侧创建新节点
+  const newNodeId = `crop_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const newNodePosition = {
+    x: currentNode.position.x + 380,
+    y: currentNode.position.y
+  }
+  
+  // 创建新的图像节点
+  canvasStore.addNode({
+    id: newNodeId,
+    type: 'image',
+    position: newNodePosition,
+    data: {
+      label: result.isExpanded ? '扩图' : '裁剪',
+      output: {
+        url: result.dataUrl,
+        urls: [result.dataUrl]
+      },
+      sourceNodeId: props.id,
+      cropInfo: {
+        width: result.width,
+        height: result.height,
+        isExpanded: result.isExpanded
+      }
+    }
+  })
+  
+  console.log('[ImageNode] 已创建新节点:', newNodeId, `${result.width}x${result.height}`, result.isExpanded ? '(扩图)' : '(裁剪)')
+  
+  // 关闭裁剪组件
+  showCropper.value = false
+  cropperImageUrl.value = ''
+}
+
+// 处理裁剪取消
+function handleCropCancel() {
+  showCropper.value = false
+  cropperImageUrl.value = ''
 }
 
 // 旧的编辑器相关函数（保留兼容性，可稍后移除）
@@ -997,6 +1364,11 @@ watch(() => props.selected, (isSelected) => {
     nextTick(() => {
       autoResizeTextarea()
     })
+  } else {
+    // 节点取消选中时，关闭抠图选项弹窗
+    if (showCutoutOptions.value) {
+      closeCutoutOptions()
+    }
   }
 }, { immediate: true })
 
@@ -2910,19 +3282,88 @@ async function handleDrop(event) {
         </svg>
         <span>增强</span>
       </button>
-      <button class="toolbar-btn" title="抠图" @mousedown.prevent="handleToolbarCutout">
+      <div class="toolbar-btn-wrapper">
+        <button 
+          class="toolbar-btn" 
+          :class="{ 'is-processing': isRemovingBackground }"
+          title="抠图" 
+          @click.stop="handleToolbarCutout"
+          :disabled="isRemovingBackground"
+        >
+          <svg v-if="!isRemovingBackground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="5" stroke-dasharray="3 2"/>
+          </svg>
+          <svg v-else class="animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+          </svg>
+          <span>{{ isRemovingBackground ? `${removeBgProgress}%` : '抠图' }}</span>
+        </button>
+        
+        <!-- 抠图选项弹窗 -->
+        <Transition name="cutout-popup">
+          <div v-if="showCutoutOptions" class="cutout-options-popup" @click.stop>
+            <button class="cutout-close-btn" @click="closeCutoutOptions">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <div class="cutout-options-grid">
+              <button
+                v-for="preset in cutoutBgPresets"
+                :key="preset.id"
+                class="cutout-option-btn"
+                :class="{ 'is-custom': preset.id === 'custom' }"
+                @click="preset.id === 'custom' ? null : startCutoutWithBg(preset.id)"
+                :title="preset.label"
+              >
+                <span
+                  class="cutout-color-preview"
+                  :class="{
+                    'transparent-preview': preset.id === 'transparent',
+                    'custom-preview': preset.id === 'custom'
+                  }"
+                  :style="preset.color ? { background: preset.color } : {}"
+                >
+                  <!-- 自定义颜色的黑白灰SVG icon -->
+                  <svg v-if="preset.id === 'custom'" class="custom-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <!-- 调色板形状 -->
+                    <path d="M12 2L3 7l9 5 9-5-9-5z" stroke="#888" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M3 7v10l9 5 9-5V7" stroke="#888" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                    <!-- 黑白灰颜色点 -->
+                    <circle cx="7.5" cy="11.5" r="1.8" fill="#1a1a1a"/>
+                    <circle cx="12" cy="11.5" r="1.8" fill="#666"/>
+                    <circle cx="16.5" cy="11.5" r="1.8" fill="#bbb"/>
+                  </svg>
+                </span>
+
+                <!-- 自定义颜色选择器 -->
+                <input
+                  v-if="preset.id === 'custom'"
+                  type="color"
+                  v-model="cutoutCustomColor"
+                  class="cutout-color-input"
+                  @change="startCutoutWithBg('custom')"
+                  title="点击选择颜色"
+                />
+              </button>
+            </div>
+          </div>
+        </Transition>
+      </div>
+      <button class="toolbar-btn" title="9宫格裁剪" @mousedown.prevent="handleToolbarGridCrop">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M4 4h4M4 4v4M20 4h-4M20 4v4M4 20h4M4 20v-4M20 20h-4M20 20v-4" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="12" cy="12" r="5" stroke-dasharray="3 2"/>
+          <!-- 外框 -->
+          <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- 垂直分割线 -->
+          <line x1="9" y1="3" x2="9" y2="21" stroke-linecap="round"/>
+          <line x1="15" y1="3" x2="15" y2="21" stroke-linecap="round"/>
+          <!-- 水平分割线 -->
+          <line x1="3" y1="9" x2="21" y2="9" stroke-linecap="round"/>
+          <line x1="3" y1="15" x2="21" y2="15" stroke-linecap="round"/>
         </svg>
-        <span>抠图</span>
-      </button>
-      <button class="toolbar-btn" title="扩图" @mousedown.prevent="handleToolbarExpand">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="6" y="6" width="12" height="12" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M3 9V5a2 2 0 012-2h4M15 3h4a2 2 0 012 2v4M21 15v4a2 2 0 01-2 2h-4M9 21H5a2 2 0 01-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>扩图</span>
+        <span>9宫格裁剪</span>
       </button>
       <div class="toolbar-divider"></div>
       <button class="toolbar-btn icon-only" title="标注" @mousedown.prevent="handleToolbarAnnotate">
@@ -3094,7 +3535,10 @@ async function handleDrop(event) {
             <div 
               v-else-if="hasOutput" 
               class="preview-images"
-              :class="{ 'single-image': outputImages.length === 1 }"
+              :class="{ 
+                'single-image': outputImages.length === 1,
+                'transparent-bg': props.data?.isTransparent || props.data?.cutoutResult
+              }"
             >
               <img 
                 v-for="(img, index) in outputImages.slice(0, 4)" 
@@ -3102,6 +3546,7 @@ async function handleDrop(event) {
                 :src="img" 
                 :alt="`生成结果 ${index + 1}`"
                 class="preview-image"
+                :class="{ 'transparent-image': props.data?.isTransparent || props.data?.cutoutResult }"
               />
             </div>
             
@@ -3427,6 +3872,14 @@ async function handleDrop(event) {
     @refresh="loadImagePresets"
     @select="handlePresetSelect"
   />
+  
+  <!-- 独立裁剪组件 -->
+  <ImageCropper
+    :visible="showCropper"
+    :imageUrl="cropperImageUrl"
+    @save="handleCropSave"
+    @cancel="handleCropCancel"
+  />
 </template>
 
 <style scoped>
@@ -3481,6 +3934,179 @@ async function handleDrop(event) {
 .image-toolbar .toolbar-btn:hover {
   background: #3a3a3a;
   color: #fff;
+}
+
+.image-toolbar .toolbar-btn.is-processing {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  cursor: wait;
+}
+
+.image-toolbar .toolbar-btn.is-processing:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.image-toolbar .toolbar-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* 工具栏按钮包装器 - 用于弹窗定位 */
+.image-toolbar .toolbar-btn-wrapper {
+  position: relative;
+}
+
+/* 抠图选项弹窗 */
+.cutout-options-popup {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(32, 32, 32, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px;
+  width: 260px;
+  min-width: 260px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+}
+
+.cutout-options-popup::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: rgba(32, 32, 32, 0.98);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.cutout-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  z-index: 1;
+}
+
+.cutout-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.cutout-close-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cutout-options-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.cutout-option-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.cutout-option-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-2px);
+}
+
+.cutout-option-btn:active {
+  transform: scale(0.95);
+}
+
+.cutout-color-preview {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cutout-color-preview.transparent-preview {
+  background:
+    linear-gradient(45deg, #555 25%, transparent 25%),
+    linear-gradient(-45deg, #555 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #555 75%),
+    linear-gradient(-45deg, transparent 75%, #555 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0px;
+  background-color: #888;
+}
+
+.cutout-color-preview.custom-preview {
+  background: linear-gradient(135deg, #333 0%, #666 50%, #999 100%);
+}
+
+.custom-icon {
+  width: 20px;
+  height: 20px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.cutout-option-btn.is-custom {
+  position: relative;
+  overflow: hidden;
+}
+
+.cutout-color-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+}
+
+.cutout-options-hint {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+}
+
+/* 弹窗动画 */
+.cutout-popup-enter-active,
+.cutout-popup-leave-active {
+  transition: all 0.2s ease;
+}
+
+.cutout-popup-enter-from,
+.cutout-popup-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 
 .image-toolbar .toolbar-btn svg {
@@ -3819,6 +4445,23 @@ async function handleDrop(event) {
 
 .preview-image:hover {
   transform: scale(1.02);
+}
+
+/* 透明图背景 - 棋盘格 */
+.preview-images.transparent-bg {
+  background: 
+    linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+  background-color: #444;
+  border-radius: 12px;
+}
+
+.preview-image.transparent-image {
+  background: transparent;
 }
 
 /* 单图时 - 全尺寸无边框展示 */

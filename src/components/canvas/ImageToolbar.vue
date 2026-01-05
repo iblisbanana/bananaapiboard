@@ -40,7 +40,8 @@ const emit = defineEmits([
   'annotate',     // 标注
   'crop',         // 裁剪
   'download',     // 下载
-  'preview'       // 放大预览
+  'preview',      // 放大预览
+  'grid-crop'     // 9宫格裁剪
 ])
 
 const canvasStore = useCanvasStore()
@@ -75,7 +76,7 @@ const imageUrl = computed(() => {
 // 是否有图片可操作
 const hasImage = computed(() => !!imageUrl.value)
 
-// 工具栏按钮配置 - 按截图顺序排列
+// 工具栏按钮配置 - 按截图顺序排列 (v2)
 const toolbarItems = [
   { 
     id: 'repaint', 
@@ -110,6 +111,13 @@ const toolbarItems = [
     icon: 'expand',
     label: '扩图', 
     handler: handleExpand,
+    requiresImage: true
+  },
+  { 
+    id: 'grid-crop', 
+    icon: 'grid-crop',
+    label: '9宫格裁剪', 
+    handler: handleGridCrop,
     requiresImage: true
   },
   // 分隔符
@@ -194,6 +202,121 @@ function handleExpand() {
     nodeId: props.imageNode?.id, 
     imageUrl: imageUrl.value 
   })
+}
+
+// 9宫格裁剪状态
+const isGridCropping = ref(false)
+
+// 9宫格裁剪 - 将图片裁剪成9份并创建组
+async function handleGridCrop() {
+  console.log('[ImageToolbar] 9宫格裁剪', props.imageNode?.id)
+  if (!imageUrl.value || isGridCropping.value) return
+  
+  isGridCropping.value = true
+  
+  try {
+    // 加载图片
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = reject
+      img.src = imageUrl.value
+    })
+    
+    const imgWidth = img.naturalWidth
+    const imgHeight = img.naturalHeight
+    const cellWidth = Math.floor(imgWidth / 3)
+    const cellHeight = Math.floor(imgHeight / 3)
+    
+    // 创建9个裁剪后的图片
+    const croppedImages = []
+    
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const canvas = document.createElement('canvas')
+        canvas.width = cellWidth
+        canvas.height = cellHeight
+        const ctx = canvas.getContext('2d')
+        
+        // 裁剪对应区域
+        ctx.drawImage(
+          img,
+          col * cellWidth,      // 源x
+          row * cellHeight,     // 源y
+          cellWidth,            // 源宽
+          cellHeight,           // 源高
+          0,                    // 目标x
+          0,                    // 目标y
+          cellWidth,            // 目标宽
+          cellHeight            // 目标高
+        )
+        
+        // 转换为blob URL
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+        const blobUrl = URL.createObjectURL(blob)
+        croppedImages.push({
+          url: blobUrl,
+          row,
+          col,
+          index: row * 3 + col
+        })
+      }
+    }
+    
+    // 计算新节点的位置（基于原节点位置）
+    const baseX = props.imageNode.position?.x || 0
+    const baseY = props.imageNode.position?.y || 0
+    const nodeWidth = 200  // 每个小图节点的宽度
+    const nodeHeight = 200 // 每个小图节点的高度
+    const gap = 16         // 节点间距
+    
+    // 偏移到原节点右侧
+    const offsetX = (props.imageNode.style?.width || 400) + 50
+    
+    // 创建9个图片节点
+    const newNodeIds = []
+    for (const item of croppedImages) {
+      const nodeId = `grid-crop-${Date.now()}-${item.index}`
+      const nodeX = baseX + offsetX + item.col * (nodeWidth + gap)
+      const nodeY = baseY + item.row * (nodeHeight + gap)
+      
+      canvasStore.addNode({
+        id: nodeId,
+        type: 'image',
+        position: { x: nodeX, y: nodeY },
+        data: {
+          title: `裁剪 ${item.index + 1}`,
+          urls: [item.url],
+          output: {
+            type: 'image',
+            urls: [item.url]
+          }
+        }
+      }, true) // skipHistory = true，最后统一保存历史
+      
+      newNodeIds.push(nodeId)
+    }
+    
+    // 创建编组
+    if (newNodeIds.length === 9) {
+      canvasStore.createGroup(newNodeIds, '9宫格裁剪')
+    }
+    
+    console.log('[ImageToolbar] 9宫格裁剪完成，创建了', newNodeIds.length, '个节点')
+    
+    emit('grid-crop', { 
+      nodeId: props.imageNode?.id, 
+      imageUrl: imageUrl.value,
+      newNodeIds
+    })
+    
+  } catch (error) {
+    console.error('[ImageToolbar] 9宫格裁剪失败:', error)
+  } finally {
+    isGridCropping.value = false
+  }
 }
 
 // 标注（预留事件）
@@ -393,6 +516,18 @@ onUnmounted(() => {
           <svg v-else-if="item.icon === 'expand'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <rect x="6" y="6" width="12" height="12" rx="1" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M3 9V5a2 2 0 012-2h4M15 3h4a2 2 0 012 2v4M21 15v4a2 2 0 01-2 2h-4M9 21H5a2 2 0 01-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          
+          <!-- 9宫格裁剪图标 -->
+          <svg v-else-if="item.icon === 'grid-crop'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <!-- 外框 -->
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- 垂直分割线 -->
+            <line x1="9" y1="3" x2="9" y2="21" stroke-linecap="round"/>
+            <line x1="15" y1="3" x2="15" y2="21" stroke-linecap="round"/>
+            <!-- 水平分割线 -->
+            <line x1="3" y1="9" x2="21" y2="9" stroke-linecap="round"/>
+            <line x1="3" y1="15" x2="21" y2="15" stroke-linecap="round"/>
           </svg>
           
           <!-- 标注图标 -->
