@@ -100,6 +100,13 @@ const selectedAspectRatio = ref(props.data.aspectRatio || 'auto')
 const selectedCount = ref(props.data.count || 1)
 const imageSize = ref(props.data.imageSize || '4K') // 尺寸选项（仅 nano-banana-2）
 
+// MJ botType 选择（图生图模式：写实/动漫）
+const botType = ref(props.data.botType || 'MID_JOURNEY')
+const botTypeOptions = [
+  { value: 'MID_JOURNEY', label: '写实' },
+  { value: 'NIJI_JOURNEY', label: '动漫' }
+]
+
 // 生成次数选项循环：1 -> 2 -> 4 -> 1
 const countOptions = [1, 2, 4]
 
@@ -421,6 +428,12 @@ onUnmounted(() => {
 
 // 检查是否有图片输入（用于判断文生图/图生图模式）
 const hasImageInput = computed(() => {
+  // 1. 首先检查节点自身是否有参考图片（用户拖拽添加的）
+  if (props.data?.sourceImages?.length > 0) {
+    return true
+  }
+  
+  // 2. 然后检查上游连接的节点
   const allEdges = [...canvasStore.edges]
   const allNodes = [...canvasStore.nodes]
   const upstreamEdges = allEdges.filter(e => e.target === props.id)
@@ -450,6 +463,18 @@ const models = computed(() => {
   return getAvailableImageModels(currentMode)
 })
 
+// 判断当前模型是否是 MJ 类型（通过模型名称判断，更可靠）
+const isMJModel = computed(() => {
+  const modelName = selectedModel.value?.toLowerCase() || ''
+  // 匹配 mjv7、midjourney-vector、mjvector 等 MJ 相关模型
+  const isMJ = modelName.includes('mjv7') || 
+               modelName.includes('midjourney') || 
+               modelName.includes('mjvector') ||
+               modelName.includes('mj-')
+  console.log('[ImageNode] 当前模型:', selectedModel.value, '| isMJ:', isMJ)
+  return isMJ
+})
+
 // 默认尺寸选项配置（当模型配置中没有指定积分时使用）
 const defaultSizePricing = { '1K': 3, '2K': 4, '4K': 5 }
 
@@ -475,10 +500,17 @@ const imageSizes = computed(() => {
   ]
 })
 
-// 是否显示尺寸选项（从模型配置中读取 hasResolutionPricing）
+// 是否显示尺寸选项（从模型配置中读取 hasResolutionPricing，MJ模型时隐藏）
 const showResolutionOption = computed(() => {
+  // MJ 模型不显示尺寸选项（不起作用）
+  if (isMJModel.value) return false
   const currentModel = models.value.find(m => m.value === selectedModel.value)
   return currentModel?.hasResolutionPricing || false
+})
+
+// 是否显示预设选项（MJ模型时隐藏，因为不起作用）
+const showPresetOption = computed(() => {
+  return !isMJModel.value
 })
 
 // 计算当前积分消耗
@@ -839,9 +871,52 @@ function handleToolbarExpand() {
 // 9宫格裁剪状态
 const isGridCropping = ref(false)
 
+// 4宫格裁剪状态
+const isGrid4Cropping = ref(false)
+
 // 独立裁剪组件状态
 const showCropper = ref(false)
 const cropperImageUrl = ref('')
+
+/**
+ * 获取可用于 canvas 操作的图片 URL
+ * 对于外部 URL（跨域），使用后端代理绕过 CORS 限制
+ */
+function getProxiedImageUrl(imageUrl) {
+  if (!imageUrl) return null
+  
+  // 如果是 data URL 或 blob URL，直接使用
+  if (imageUrl.startsWith('data:') || imageUrl.startsWith('blob:')) {
+    return imageUrl
+  }
+  
+  // 如果是相对路径（本地存储），直接使用
+  if (imageUrl.startsWith('/storage/') || imageUrl.startsWith('/api/')) {
+    return imageUrl
+  }
+  
+  // 检查是否是外部 URL（以 http:// 或 https:// 开头）
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+    // 检查是否是同源（当前后端的域名）
+    const currentHost = window.location.host
+    try {
+      const urlObj = new URL(imageUrl)
+      // 如果是同一个域名，直接使用
+      if (urlObj.host === currentHost) {
+        return imageUrl
+      }
+    } catch (e) {
+      // URL 解析失败，继续使用代理
+    }
+    
+    // 外部 URL，使用代理接口绕过 CORS
+    console.log('[ImageNode] 使用代理加载外部图片:', imageUrl.substring(0, 60) + '...')
+    return `${getApiUrl('/api/images/proxy')}?url=${encodeURIComponent(imageUrl)}`
+  }
+  
+  // 其他情况直接返回
+  return imageUrl
+}
 
 // 9宫格裁剪 - 将图片裁剪成9份并创建组
 async function handleToolbarGridCrop() {
@@ -863,14 +938,19 @@ async function handleToolbarGridCrop() {
   isGridCropping.value = true
   
   try {
-    // 加载图片
+    // 加载图片 - 使用代理URL绕过CORS限制
     const img = new Image()
     img.crossOrigin = 'anonymous'
+    const proxiedUrl = getProxiedImageUrl(imageUrl)
+    console.log('[ImageNode] 9宫格裁剪：加载图片', proxiedUrl?.substring(0, 80))
     
     await new Promise((resolve, reject) => {
       img.onload = resolve
-      img.onerror = reject
-      img.src = imageUrl
+      img.onerror = (e) => {
+        console.error('[ImageNode] 9宫格裁剪：图片加载失败', e)
+        reject(e)
+      }
+      img.src = proxiedUrl
     })
     
     const imgWidth = img.naturalWidth
@@ -954,6 +1034,125 @@ async function handleToolbarGridCrop() {
     console.error('[ImageNode] 9宫格裁剪失败:', error)
   } finally {
     isGridCropping.value = false
+  }
+}
+
+// 4宫格裁剪 - 将图片裁剪成4份并创建组 (2x2布局)
+async function handleToolbarGrid4Crop() {
+  console.log('[ImageNode] 工具栏：4宫格裁剪', props.id)
+  
+  // 获取当前节点的图片URL（优先使用sourceImages，然后是output）
+  const imageUrl = sourceImages.value?.[0] || props.data?.output?.url || props.data?.output?.urls?.[0]
+  if (!imageUrl) {
+    console.warn('[ImageNode] 4宫格裁剪：没有图片')
+    showAlert('提示', '请先上传或生成图片')
+    return
+  }
+  
+  if (isGrid4Cropping.value) {
+    console.warn('[ImageNode] 4宫格裁剪：正在处理中')
+    return
+  }
+  
+  isGrid4Cropping.value = true
+  
+  try {
+    // 加载图片 - 使用代理URL绕过CORS限制
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    const proxiedUrl = getProxiedImageUrl(imageUrl)
+    console.log('[ImageNode] 4宫格裁剪：加载图片', proxiedUrl?.substring(0, 80))
+    
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = (e) => {
+        console.error('[ImageNode] 4宫格裁剪：图片加载失败', e)
+        reject(e)
+      }
+      img.src = proxiedUrl
+    })
+    
+    const imgWidth = img.naturalWidth
+    const imgHeight = img.naturalHeight
+    const cellWidth = Math.floor(imgWidth / 2)
+    const cellHeight = Math.floor(imgHeight / 2)
+    
+    // 裁剪成4份 (2x2)
+    const croppedImages = []
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 2; col++) {
+        const canvas = document.createElement('canvas')
+        canvas.width = cellWidth
+        canvas.height = cellHeight
+        const ctx = canvas.getContext('2d')
+        
+        ctx.drawImage(
+          img,
+          col * cellWidth,
+          row * cellHeight,
+          cellWidth,
+          cellHeight,
+          0,
+          0,
+          cellWidth,
+          cellHeight
+        )
+        
+        const dataUrl = canvas.toDataURL('image/png')
+        croppedImages.push({
+          index: row * 2 + col,
+          row,
+          col,
+          dataUrl
+        })
+      }
+    }
+    
+    // 计算节点布局参数
+    const nodeWidth = 300
+    const nodeHeight = 320
+    const gap = 20
+    
+    // 获取当前节点位置
+    const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+    const baseX = currentNode?.position?.x || 0
+    const baseY = currentNode?.position?.y || 0
+    const offsetX = 400 // 在原节点右侧
+    
+    // 创建4个图片节点
+    const newNodeIds = []
+    for (const item of croppedImages) {
+      const nodeId = `grid4-crop-${Date.now()}-${item.index}`
+      const nodeX = baseX + offsetX + item.col * (nodeWidth + gap)
+      const nodeY = baseY + item.row * (nodeHeight + gap)
+      
+      canvasStore.addNode({
+        id: nodeId,
+        type: 'image',
+        position: { x: nodeX, y: nodeY },
+        data: {
+          label: `裁剪 ${item.row + 1}-${item.col + 1}`,
+          nodeRole: 'source',  // 必须设置为source才能显示sourceImages
+          sourceImages: [item.dataUrl],  // 使用sourceImages数组存储裁剪后的图片
+          isGenerated: true,
+          fromGridCrop: true  // 标记来源
+        }
+      })
+      
+      newNodeIds.push(nodeId)
+    }
+    
+    // 创建包含这4个节点的组
+    if (newNodeIds.length === 4) {
+      canvasStore.createGroup(newNodeIds, '4宫格裁剪')
+    }
+    
+    console.log('[ImageNode] 4宫格裁剪完成，创建了', newNodeIds.length, '个节点')
+    
+  } catch (error) {
+    console.error('[ImageNode] 4宫格裁剪失败:', error)
+  } finally {
+    isGrid4Cropping.value = false
   }
 }
 
@@ -1332,15 +1531,16 @@ const quickActions = [
 ]
 
 // 监听参数变化，保存到store
-watch([selectedModel, selectedResolution, selectedAspectRatio, selectedCount, promptText, imageSize], 
-  ([model, resolution, aspectRatio, count, prompt, size]) => {
+watch([selectedModel, selectedResolution, selectedAspectRatio, selectedCount, promptText, imageSize, botType], 
+  ([model, resolution, aspectRatio, count, prompt, size, bot]) => {
     canvasStore.updateNodeData(props.id, {
       model,
       resolution,
       aspectRatio,
       count,
       prompt,
-      imageSize: size
+      imageSize: size,
+      botType: bot
     })
   }
 )
@@ -2004,7 +2204,9 @@ async function sendImageGenerateRequest(finalPrompt, userPrompt = null) {
     aspectRatio: selectedAspectRatio.value,
     count: 1, // 单次请求固定为1
     // 所有模型都传递 image_size 参数
-    image_size: imageSize.value || '2K'
+    image_size: imageSize.value || '2K',
+    // MJ 模型的 botType 参数（写实/动漫）
+    ...(isMJModel.value && { botType: botType.value })
   }
   
   if (finalReferenceImages.length > 0) {
@@ -3365,6 +3567,17 @@ async function handleDrop(event) {
         </svg>
         <span>9宫格裁剪</span>
       </button>
+      <button class="toolbar-btn" title="4宫格裁剪" @mousedown.prevent="handleToolbarGrid4Crop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <!-- 外框 -->
+          <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- 垂直分割线 (中间一条) -->
+          <line x1="12" y1="3" x2="12" y2="21" stroke-linecap="round"/>
+          <!-- 水平分割线 (中间一条) -->
+          <line x1="3" y1="12" x2="21" y2="12" stroke-linecap="round"/>
+        </svg>
+        <span>4宫格裁剪</span>
+      </button>
       <div class="toolbar-divider"></div>
       <button class="toolbar-btn icon-only" title="标注" @mousedown.prevent="handleToolbarAnnotate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -3702,7 +3915,7 @@ async function handleDrop(event) {
               class="model-selector-trigger"
               @click="toggleModelDropdown"
             >
-              <span class="model-icon">{{ models.find(m => m.value === selectedModel)?.icon || 'B' }}</span>
+              <span class="model-icon">🍌</span>
               <span class="model-name">{{ models.find(m => m.value === selectedModel)?.label || selectedModel }}</span>
               <span class="select-arrow" :class="{ 'arrow-up': isModelDropdownOpen }">▾</span>
             </div>
@@ -3745,8 +3958,8 @@ async function handleDrop(event) {
             </select>
           </div>
           
-          <!-- 预设选择器 -->
-          <div class="preset-selector-custom" ref="presetSelectorRef" @click.stop>
+          <!-- 预设选择器（MJ模型时隐藏） -->
+          <div v-if="showPresetOption" class="preset-selector-custom" ref="presetSelectorRef" @click.stop>
             <div class="preset-selector-trigger" @click="togglePresetDropdown">
               <span class="preset-icon">◈</span>
               <span class="preset-name">{{ selectedPresetLabel }}</span>
@@ -3781,6 +3994,20 @@ async function handleDrop(event) {
                 </div>
               </div>
             </Transition>
+          </div>
+          
+          <!-- MJ 模型 botType 切换器（写实/动漫） -->
+          <div v-if="isMJModel && hasImageInput" class="bot-type-selector">
+            <div 
+              v-for="option in botTypeOptions" 
+              :key="option.value"
+              class="bot-type-chip"
+              :class="{ active: botType === option.value }"
+              @click="botType = option.value"
+              :title="option.value === 'MID_JOURNEY' ? 'Midjourney 写实风格' : 'Niji Journey 动漫风格'"
+            >
+              {{ option.label }}
+            </div>
           </div>
           
           <!-- 尺寸切换（根据模型配置显示） -->
@@ -5225,6 +5452,34 @@ async function handleDrop(event) {
 .param-chip-group {
   display: flex;
   gap: 6px;
+}
+
+/* MJ botType 选择器样式 - 黑白灰风格 */
+.bot-type-selector {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.bot-type-chip {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.bot-type-chip:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.bot-type-chip.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.95);
 }
 
 .count-display {

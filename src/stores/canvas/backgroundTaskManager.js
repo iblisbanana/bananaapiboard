@@ -175,7 +175,20 @@ function startPolling(taskId) {
       
     } catch (error) {
       console.error(`[BackgroundTaskManager] 轮询任务 ${taskId} 出错:`, error)
-      // 出错时不停止轮询，继续尝试
+      
+      // 如果任务不存在（404错误），标记为失败并停止轮询
+      if (error.message?.includes('任务不存在') || error.message?.includes('not found')) {
+        task.status = 'failed'
+        task.error = '任务不存在或已过期，请重新生成'
+        task.updatedAt = Date.now()
+        tasks.set(taskId, task)
+        saveTasksToStorage()
+        stopPolling(taskId)
+        notifyTaskFailed(taskId, task)
+        console.log(`[BackgroundTaskManager] 任务 ${taskId} 不存在，已停止轮询`)
+        return
+      }
+      // 其他错误继续尝试轮询
     }
   }
   

@@ -15,7 +15,7 @@
  */
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
-import { getTenantHeaders } from '@/config/tenant'
+import { getTenantHeaders, getApiUrl } from '@/config/tenant'
 
 const props = defineProps({
   // 选中的图像节点
@@ -41,7 +41,8 @@ const emit = defineEmits([
   'crop',         // 裁剪
   'download',     // 下载
   'preview',      // 放大预览
-  'grid-crop'     // 9宫格裁剪
+  'grid-crop',    // 9宫格裁剪
+  'grid4-crop'    // 4宫格裁剪
 ])
 
 const canvasStore = useCanvasStore()
@@ -118,6 +119,13 @@ const toolbarItems = [
     icon: 'grid-crop',
     label: '9宫格裁剪', 
     handler: handleGridCrop,
+    requiresImage: true
+  },
+  { 
+    id: 'grid4-crop', 
+    icon: 'grid4-crop',
+    label: '4宫格裁剪', 
+    handler: handleGrid4Crop,
     requiresImage: true
   },
   // 分隔符
@@ -207,6 +215,46 @@ function handleExpand() {
 // 9宫格裁剪状态
 const isGridCropping = ref(false)
 
+/**
+ * 获取可用于 canvas 操作的图片 URL
+ * 对于外部 URL（跨域），使用后端代理绕过 CORS 限制
+ */
+function getProxiedImageUrl(url) {
+  if (!url) return null
+  
+  // 如果是 data URL 或 blob URL，直接使用
+  if (url.startsWith('data:') || url.startsWith('blob:')) {
+    return url
+  }
+  
+  // 如果是相对路径（本地存储），直接使用
+  if (url.startsWith('/storage/') || url.startsWith('/api/')) {
+    return url
+  }
+  
+  // 检查是否是外部 URL（以 http:// 或 https:// 开头）
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    // 检查是否是同源（当前后端的域名）
+    const currentHost = window.location.host
+    try {
+      const urlObj = new URL(url)
+      // 如果是同一个域名，直接使用
+      if (urlObj.host === currentHost) {
+        return url
+      }
+    } catch (e) {
+      // URL 解析失败，继续使用代理
+    }
+    
+    // 外部 URL，使用代理接口绕过 CORS
+    console.log('[ImageToolbar] 使用代理加载外部图片:', url.substring(0, 60) + '...')
+    return `${getApiUrl('/api/images/proxy')}?url=${encodeURIComponent(url)}`
+  }
+  
+  // 其他情况直接返回
+  return url
+}
+
 // 9宫格裁剪 - 将图片裁剪成9份并创建组
 async function handleGridCrop() {
   console.log('[ImageToolbar] 9宫格裁剪', props.imageNode?.id)
@@ -215,14 +263,19 @@ async function handleGridCrop() {
   isGridCropping.value = true
   
   try {
-    // 加载图片
+    // 加载图片 - 使用代理URL绕过CORS限制
     const img = new Image()
     img.crossOrigin = 'anonymous'
+    const proxiedUrl = getProxiedImageUrl(imageUrl.value)
+    console.log('[ImageToolbar] 9宫格裁剪：加载图片', proxiedUrl?.substring(0, 80))
     
     await new Promise((resolve, reject) => {
       img.onload = resolve
-      img.onerror = reject
-      img.src = imageUrl.value
+      img.onerror = (e) => {
+        console.error('[ImageToolbar] 9宫格裁剪：图片加载失败', e)
+        reject(e)
+      }
+      img.src = proxiedUrl
     })
     
     const imgWidth = img.naturalWidth
@@ -316,6 +369,126 @@ async function handleGridCrop() {
     console.error('[ImageToolbar] 9宫格裁剪失败:', error)
   } finally {
     isGridCropping.value = false
+  }
+}
+
+// 4宫格裁剪状态
+const isGrid4Cropping = ref(false)
+
+// 4宫格裁剪 - 将图片裁剪成4份并创建组 (2x2布局)
+async function handleGrid4Crop() {
+  console.log('[ImageToolbar] 4宫格裁剪', props.imageNode?.id)
+  if (!imageUrl.value || isGrid4Cropping.value) return
+  
+  isGrid4Cropping.value = true
+  
+  try {
+    // 加载图片 - 使用代理URL绕过CORS限制
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    const proxiedUrl = getProxiedImageUrl(imageUrl.value)
+    console.log('[ImageToolbar] 4宫格裁剪：加载图片', proxiedUrl?.substring(0, 80))
+    
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = (e) => {
+        console.error('[ImageToolbar] 4宫格裁剪：图片加载失败', e)
+        reject(e)
+      }
+      img.src = proxiedUrl
+    })
+    
+    const imgWidth = img.naturalWidth
+    const imgHeight = img.naturalHeight
+    const cellWidth = Math.floor(imgWidth / 2)
+    const cellHeight = Math.floor(imgHeight / 2)
+    
+    // 创建4个裁剪后的图片 (2x2)
+    const croppedImages = []
+    
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 2; col++) {
+        const canvas = document.createElement('canvas')
+        canvas.width = cellWidth
+        canvas.height = cellHeight
+        const ctx = canvas.getContext('2d')
+        
+        // 裁剪对应区域
+        ctx.drawImage(
+          img,
+          col * cellWidth,      // 源x
+          row * cellHeight,     // 源y
+          cellWidth,            // 源宽
+          cellHeight,           // 源高
+          0,                    // 目标x
+          0,                    // 目标y
+          cellWidth,            // 目标宽
+          cellHeight            // 目标高
+        )
+        
+        // 转换为blob URL
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+        const blobUrl = URL.createObjectURL(blob)
+        croppedImages.push({
+          url: blobUrl,
+          row,
+          col,
+          index: row * 2 + col
+        })
+      }
+    }
+    
+    // 计算新节点的位置（基于原节点位置）
+    const baseX = props.imageNode.position?.x || 0
+    const baseY = props.imageNode.position?.y || 0
+    const nodeWidth = 200  // 每个小图节点的宽度
+    const nodeHeight = 200 // 每个小图节点的高度
+    const gap = 16         // 节点间距
+    
+    // 偏移到原节点右侧
+    const offsetX = (props.imageNode.style?.width || 400) + 50
+    
+    // 创建4个图片节点
+    const newNodeIds = []
+    for (const item of croppedImages) {
+      const nodeId = `grid4-crop-${Date.now()}-${item.index}`
+      const nodeX = baseX + offsetX + item.col * (nodeWidth + gap)
+      const nodeY = baseY + item.row * (nodeHeight + gap)
+      
+      canvasStore.addNode({
+        id: nodeId,
+        type: 'image',
+        position: { x: nodeX, y: nodeY },
+        data: {
+          title: `裁剪 ${item.index + 1}`,
+          urls: [item.url],
+          output: {
+            type: 'image',
+            urls: [item.url]
+          }
+        }
+      }, true) // skipHistory = true，最后统一保存历史
+      
+      newNodeIds.push(nodeId)
+    }
+    
+    // 创建编组
+    if (newNodeIds.length === 4) {
+      canvasStore.createGroup(newNodeIds, '4宫格裁剪')
+    }
+    
+    console.log('[ImageToolbar] 4宫格裁剪完成，创建了', newNodeIds.length, '个节点')
+    
+    emit('grid4-crop', { 
+      nodeId: props.imageNode?.id, 
+      imageUrl: imageUrl.value,
+      newNodeIds
+    })
+    
+  } catch (error) {
+    console.error('[ImageToolbar] 4宫格裁剪失败:', error)
+  } finally {
+    isGrid4Cropping.value = false
   }
 }
 
@@ -528,6 +701,16 @@ onUnmounted(() => {
             <!-- 水平分割线 -->
             <line x1="3" y1="9" x2="21" y2="9" stroke-linecap="round"/>
             <line x1="3" y1="15" x2="21" y2="15" stroke-linecap="round"/>
+          </svg>
+          
+          <!-- 4宫格裁剪图标 -->
+          <svg v-else-if="item.icon === 'grid4-crop'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <!-- 外框 -->
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <!-- 垂直分割线 (中间一条) -->
+            <line x1="12" y1="3" x2="12" y2="21" stroke-linecap="round"/>
+            <!-- 水平分割线 (中间一条) -->
+            <line x1="3" y1="12" x2="21" y2="12" stroke-linecap="round"/>
           </svg>
           
           <!-- 标注图标 -->

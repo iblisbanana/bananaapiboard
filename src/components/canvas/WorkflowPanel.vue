@@ -314,7 +314,7 @@ async function handleDelete() {
     } else {
       // 删除数据库工作流
       await deleteWorkflow(deleteConfirm.value.workflow.id)
-      await loadWorkflows()
+      await loadWorkflows(true)  // 强制刷新，忽略缓存
       await loadQuotaInfo()
     }
     cancelDelete()

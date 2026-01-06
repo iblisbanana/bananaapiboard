@@ -572,7 +572,9 @@ export const getAvailableImageModels = (mode = null) => {
         // 积分配置
         hasResolutionPricing: modelConfig.hasResolutionPricing || modelPricingConfig.hasResolutionPricing || false,
         pointsCost: modelConfig.pointsCost || modelPricingConfig.pointsCost || 1,
-        supportedModes
+        supportedModes,
+        // API 类型（用于判断是否是 MJ 模型）
+        apiType: modelConfig.apiType || null
       })
     }
     
