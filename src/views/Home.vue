@@ -641,7 +641,7 @@ function playNotificationSound() {
   }
 }
 
-// 加载历史记录（虚拟滚动：一次性加载所有）
+// 加载历史记录(虚拟滚动:一次性加载所有)
 async function loadHistory() {
   try {
     const token = localStorage.getItem('token')
@@ -657,13 +657,20 @@ async function loadHistory() {
       const data = await r.json()
       const newHistory = data.images || []
       console.log('[loadHistory] 获取到历史记录数量:', newHistory.length)
-      console.log('[loadHistory] 历史记录详情:', newHistory)
-      
+
+      // 限制历史记录数量,防止内存溢出(最多保留500条)
+      const MAX_HISTORY = 500
+      const limitedHistory = newHistory.slice(0, MAX_HISTORY)
+
+      if (newHistory.length > MAX_HISTORY) {
+        console.log(`[loadHistory] 历史记录过多(${newHistory.length}),已限制为${MAX_HISTORY}条`)
+      }
+
       // 检测新增完成的任务
-      if (lastHistoryLength.value > 0 && newHistory.length > lastHistoryLength.value) {
-        const newCompletedCount = newHistory.slice(0, newHistory.length - lastHistoryLength.value)
+      if (lastHistoryLength.value > 0 && limitedHistory.length > lastHistoryLength.value) {
+        const newCompletedCount = limitedHistory.slice(0, limitedHistory.length - lastHistoryLength.value)
           .filter(img => img.status === 'completed').length
-        
+
         if (newCompletedCount > 0 && !isHistoryDrawerOpen.value) {
           // 抽屉收起时有新任务完成
           unreadCount.value += newCompletedCount
@@ -672,18 +679,18 @@ async function loadHistory() {
       }
       // 合并服务器返回与本地等待中的任务
       // 服务器返回的数据为准，本地的 pending 任务如果服务器没有则保留
-      const serverIdSet = new Set(newHistory.map(h => h.id))
-      const localPendingTasks = history.value.filter(h => 
+      const serverIdSet = new Set(limitedHistory.map(h => h.id))
+      const localPendingTasks = history.value.filter(h =>
         !serverIdSet.has(h.id) && (h.status === 'pending' || h.status === 'processing')
       )
-      
+
       // 以服务器返回的为主，添加本地还在等待的任务
-      const merged = [...newHistory, ...localPendingTasks]
-      
+      const merged = [...limitedHistory, ...localPendingTasks]
+
       // 重新按时间倒序
       merged.sort((a, b) => (b.created || 0) - (a.created || 0))
       history.value = merged
-      lastHistoryLength.value = newHistory.length
+      lastHistoryLength.value = limitedHistory.length
     } else {
       const errorText = await r.text()
       console.error('[loadHistory] API返回错误:', errorText)
@@ -738,27 +745,35 @@ async function updateTaskInLists(taskId, status, url = null, errorMsg = null) {
 // 开始轮询未完成的任务
 function startPolling() {
   if (pollingInterval.value) return
-  
+
   pollingInterval.value = setInterval(async () => {
     const now = Math.floor(Date.now() / 1000)
     const TIMEOUT = 5 * 60 // 5分钟超时
-    
+
     const pendingTasks = history.value
       .filter(item => item.status === 'pending' || item.status === 'processing')
-    
+
+    // 限制最大并发轮询数量,防止浏览器卡顿
+    const MAX_CONCURRENT_POLLS = 5
+    const tasksToCheck = pendingTasks.slice(0, MAX_CONCURRENT_POLLS)
+
     if (pendingTasks.length === 0) {
       stopPolling()
       return
     }
-    
-    for (const task of pendingTasks) {
+
+    if (pendingTasks.length > MAX_CONCURRENT_POLLS) {
+      console.log(`[polling] 限制并发轮询: ${pendingTasks.length} -> ${MAX_CONCURRENT_POLLS}`)
+    }
+
+    for (const task of tasksToCheck) {
       // 检查是否超时（超过5分钟）
       if (task.created && (now - task.created) > TIMEOUT) {
         console.log(`[polling] 任务 ${task.id} 超时，标记为失败`)
         await updateTaskInLists(task.id, 'failed', null, '生成超时，请重试')
         continue
       }
-      
+
       const taskData = await checkTaskStatus(task.id)
       if (taskData) {
         if (taskData.status === 'completed') {

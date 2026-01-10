@@ -572,70 +572,80 @@ async function loadHistory() {
   try {
     const token = localStorage.getItem('token')
     console.log('[VideoGeneration] 开始加载历史记录, token存在:', !!token)
-    
+
     if (!token) {
       console.log('[VideoGeneration] 未登录，跳过加载历史记录')
       history.value = []
       // gallery 不清空，保留当前生成的视频
       return
     }
-    
+
     const response = await fetch('/api/videos/history', {
       headers: { ...getTenantHeaders(), Authorization: `Bearer ${token}` }
     })
-    
+
     console.log('[VideoGeneration] API响应状态:', response.status, response.ok)
-    
+
     if (!response.ok) {
       console.error('[VideoGeneration] API返回错误状态:', response.status)
       return
     }
-    
+
     const data = await response.json()
     console.log('[VideoGeneration] 获取到原始数据:', data)
-    
+
     const ONE_HOUR = 60 * 60 * 1000
     const now = Date.now()
-    
-    const videos = (data.videos || []).map(item => {
+
+    // 限制历史记录数量,防止内存溢出(最多保留300条视频)
+    const MAX_HISTORY = 300
+    const allVideos = data.videos || []
+    const limitedVideos = allVideos.slice(0, MAX_HISTORY)
+
+    if (allVideos.length > MAX_HISTORY) {
+      console.log(`[VideoGeneration] 历史记录过多(${allVideos.length}),已限制为${MAX_HISTORY}条`)
+    }
+
+    const videos = limitedVideos.map(item => {
       const video = {
         ...item,
         task_id: item.task_id || item.id,
         created_at: item.created_at || item.created
       }
-      
+
       // 检查超时：如果超过1小时且还在处理中，标记为超时失败
       const createdAt = video.created_at || 0
       const elapsed = now - createdAt
-      
+
       if (elapsed > ONE_HOUR && isProcessingStatus(video.status)) {
         console.log(`[VideoGeneration] 发现超时任务: ${video.id}, 已运行 ${Math.floor(elapsed / 1000 / 60)} 分钟`)
         video.status = 'timeout'
         video.progress = '生成超时'
         video.fail_reason = '生成超时（超过1小时），未扣除积分'
       }
-      
+
       return video
     })
-    
+
     console.log('[VideoGeneration] 处理后的视频列表:', videos.length, '条')
-    console.log('[VideoGeneration] 视频详情:', videos)
-    
+
     // 更新历史记录
     history.value = videos
-    
+
     // gallery 保持为空，始终显示"开始创作"空状态
     // 所有视频任务都在历史记录抽屉中查看
     console.log('[VideoGeneration] 历史记录已加载，输出库保持空状态（显示"开始创作"）')
-    
-    // 对 history 中的未完成任务启动轮询（且未超时）
+
+    // 对 history 中的未完成任务启动轮询（且未超时）- 限制数量
+    const MAX_POLLING_TASKS = 5
     const pendingTasks = videos.filter(item => {
       const createdAt = item.created_at || 0
       const elapsed = now - createdAt
       return isProcessingStatus(item.status) && elapsed <= ONE_HOUR
-    })
-    console.log('[VideoGeneration] 未完成任务数:', pendingTasks.length, '个')
-    
+    }).slice(0, MAX_POLLING_TASKS)
+
+    console.log('[VideoGeneration] 未完成任务数:', pendingTasks.length, '个(已限制最多', MAX_POLLING_TASKS, '个)')
+
     pendingTasks.forEach(task => {
       if (task.task_id) {
         console.log('[VideoGeneration] 启动轮询:', task.task_id)

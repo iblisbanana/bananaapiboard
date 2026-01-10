@@ -573,10 +573,15 @@ const nodeClass = computed(() => ({
 }))
 
 // 节点内容样式
-const contentStyle = computed(() => ({
-  width: `${nodeWidth.value}px`,
-  minHeight: `${nodeHeight.value}px`
-}))
+// 注意：源节点和单图输出节点不使用 minHeight，让边框自适应图片尺寸
+const contentStyle = computed(() => {
+  const isSourceOrSingleOutput = isSourceNode.value || hasSingleOutput.value
+  return {
+    width: `${nodeWidth.value}px`,
+    // 源节点和单图输出节点不设置 minHeight，让高度自适应图片
+    ...(isSourceOrSingleOutput ? {} : { minHeight: `${nodeHeight.value}px` })
+  }
+})
 
 // 判断是否为源节点（只显示上传的图片，不显示配置面板）
 const isSourceNode = computed(() => {
@@ -1297,15 +1302,50 @@ function handleEditorSaveMask(data) {
 }
 
 // 统一使用后端代理下载，解决跨域和第三方CDN预览问题
+// 对于 dataUrl 格式的图片（如裁剪后的图片），直接在前端下载
 async function handleToolbarDownload() {
   if (!currentImageUrl.value) return
   
   const filename = `image_${props.id || Date.now()}.png`
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
+    const imageUrl = currentImageUrl.value
+    
+    // 如果是 dataUrl（base64），直接在前端转换为 Blob 下载
+    // 避免 URL 过长导致请求失败（dataUrl 通常几十KB到几MB）
+    if (imageUrl.startsWith('data:')) {
+      console.log('[ImageNode] dataUrl 格式图片，使用前端直接下载')
+      const blob = await dataUrlToBlob(imageUrl)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      return
+    }
+    
+    // 如果是 blob URL，直接使用
+    if (imageUrl.startsWith('blob:')) {
+      console.log('[ImageNode] blob URL 格式图片，使用前端直接下载')
+      const response = await fetch(imageUrl)
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      return
+    }
+    
+    // 其他 URL 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
     const { getApiUrl } = await import('@/config/tenant')
-    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(currentImageUrl.value)}&filename=${encodeURIComponent(filename)}`)
+    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl)}&filename=${encodeURIComponent(filename)}`)
     
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
@@ -1334,6 +1374,20 @@ async function handleToolbarDownload() {
       console.error('[ImageNode] 所有下载方式都失败:', e)
     }
   }
+}
+
+// 将 dataUrl 转换为 Blob 对象
+function dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',')
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png'
+  const base64 = parts[1]
+  const byteCharacters = atob(base64)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  return new Blob([byteArray], { type: mime })
 }
 
 function handleToolbarPreview() {
@@ -3041,12 +3095,13 @@ function startDragConnection(event) {
   }
   
   // 计算节点右侧输出端口的画布坐标（从节点位置计算）
-  // 节点位置 + 节点宽度 = 右侧边缘，Y 轴在节点中间 + 标签高度偏移
+  // 节点位置 + 节点宽度 + 偏移量 = +号按钮中心位置，Y 轴在节点中间 + 标签高度偏移
   const currentNodeWidth = props.data?.width || nodeWidth.value || 380
   const currentNodeHeight = props.data?.height || nodeHeight.value || 320
   const labelOffset = 28 // 标签高度偏移
+  const handleOffset = 34 // +号按钮中心相对于节点卡片边缘的偏移量
   
-  const outputX = currentNode.position.x + currentNodeWidth
+  const outputX = currentNode.position.x + currentNodeWidth + handleOffset
   const outputY = currentNode.position.y + labelOffset + currentNodeHeight / 2
   
   console.log('[ImageNode] 开始拖拽连线，起始位置:', { outputX, outputY, nodePosition: currentNode.position })
@@ -4488,7 +4543,7 @@ async function handleDrop(event) {
 /* ========== 源节点样式 - 无边框设计 ========== */
 .source-image-preview {
   width: 100%;
-  height: 100%;
+  /* 不设置固定高度，让容器自适应图片尺寸 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4656,22 +4711,28 @@ async function handleDrop(event) {
   justify-content: center;
   padding: 0;
   background: transparent;
+  /* 不设置固定高度，让容器自适应图片尺寸 */
 }
 
 .preview-images.single-image .preview-image {
-  width: 100%;
-  height: 100%;
+  /* 让图片自适应，不强制填充容器 */
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   aspect-ratio: auto;
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  transition: box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease, border 0.2s ease;
+  /* 选中时边框通过 border 实现，避免 box-shadow 超出图片 */
+  border: 2px solid transparent;
 }
 
-/* 单张输出选中时 - 图片发光效果 */
+/* 单张输出选中时 - 图片边框效果 */
 .image-node.has-single-output.selected .preview-images.single-image .preview-image {
+  border-color: var(--canvas-accent-primary, #3b82f6);
   box-shadow: 
     0 4px 20px rgba(0, 0, 0, 0.4),
-    0 0 0 2px var(--canvas-accent-primary, #3b82f6),
     0 0 20px rgba(59, 130, 246, 0.3);
 }
 

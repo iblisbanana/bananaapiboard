@@ -514,7 +514,22 @@ function handleCrop() {
   })
 }
 
+// 将 dataUrl 转换为 Blob 对象
+function dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',')
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png'
+  const base64 = parts[1]
+  const byteCharacters = atob(base64)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  return new Blob([byteArray], { type: mime })
+}
+
 // 下载 - 统一使用后端代理下载，解决跨域和第三方CDN预览问题
+// 对于 dataUrl 格式的图片（如裁剪后的图片），直接在前端下载
 async function handleDownload() {
   console.log('[ImageToolbar] 下载', props.imageNode?.id)
   if (!imageUrl.value) return
@@ -522,8 +537,44 @@ async function handleDownload() {
   const filename = `image_${props.imageNode?.id || Date.now()}.png`
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl.value)}&filename=${encodeURIComponent(filename)}`)
+    const url = imageUrl.value
+    
+    // 如果是 dataUrl（base64），直接在前端转换为 Blob 下载
+    // 避免 URL 过长导致请求失败（dataUrl 通常几十KB到几MB）
+    if (url.startsWith('data:')) {
+      console.log('[ImageToolbar] dataUrl 格式图片，使用前端直接下载')
+      const blob = dataUrlToBlob(url)
+      const blobUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+      emit('download', { nodeId: props.imageNode?.id, imageUrl: imageUrl.value })
+      return
+    }
+    
+    // 如果是 blob URL，直接使用
+    if (url.startsWith('blob:')) {
+      console.log('[ImageToolbar] blob URL 格式图片，使用前端直接下载')
+      const response = await fetch(url)
+      const blob = await response.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+      emit('download', { nodeId: props.imageNode?.id, imageUrl: imageUrl.value })
+      return
+    }
+    
+    // 其他 URL 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
+    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`)
     
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
@@ -534,14 +585,14 @@ async function handleDownload() {
     }
     
     const blob = await response.blob()
-    const url = window.URL.createObjectURL(blob)
+    const blobUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
-    link.href = url
+    link.href = blobUrl
     link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
+    window.URL.revokeObjectURL(blobUrl)
   } catch (error) {
     console.error('[ImageToolbar] 下载图片失败:', error)
     // 如果 fetch 失败，使用后端代理页面下载

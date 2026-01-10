@@ -2101,12 +2101,13 @@ function startDragConnection(event) {
   }
   
   // 计算节点右侧输出端口的画布坐标（从节点位置计算）
-  // 节点位置 + 节点宽度 = 右侧边缘，Y 轴在节点中间 + 标签高度偏移
+  // 节点位置 + 节点宽度 + 偏移量 = +号按钮中心位置，Y 轴在节点中间 + 标签高度偏移
   const currentNodeWidth = props.data?.width || nodeWidth.value || 420
   const currentNodeHeight = props.data?.height || nodeHeight.value || 280
   const labelOffset = 28 // 标签高度偏移
+  const handleOffset = 34 // +号按钮中心相对于节点卡片边缘的偏移量
   
-  const outputX = currentNode.position.x + currentNodeWidth
+  const outputX = currentNode.position.x + currentNodeWidth + handleOffset
   const outputY = currentNode.position.y + labelOffset + currentNodeHeight / 2
   
   console.log('[VideoNode] 开始拖拽连线，起始位置:', { outputX, outputY, nodePosition: currentNode.position })

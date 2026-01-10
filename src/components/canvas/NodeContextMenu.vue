@@ -385,16 +385,67 @@ async function downloadVideo() {
 
 // ========== 图片节点功能 ==========
 
+// 将 dataUrl 转换为 Blob 对象
+function dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',')
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png'
+  const base64 = parts[1]
+  const byteCharacters = atob(base64)
+  const byteNumbers = new Array(byteCharacters.length)
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i)
+  }
+  const byteArray = new Uint8Array(byteNumbers)
+  return new Blob([byteArray], { type: mime })
+}
+
 // 统一使用后端代理下载图片，解决跨域和第三方CDN预览问题
+// 对于 dataUrl 格式的图片（如裁剪后的图片），直接在前端下载
 async function downloadImage() {
   if (!imageUrl.value) return
   
   const filename = `image_${Date.now()}.png`
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
+    const url = imageUrl.value
+    
+    // 如果是 dataUrl（base64），直接在前端转换为 Blob 下载
+    // 避免 URL 过长导致请求失败（dataUrl 通常几十KB到几MB）
+    if (url.startsWith('data:')) {
+      console.log('[NodeContextMenu] dataUrl 格式图片，使用前端直接下载')
+      const blob = dataUrlToBlob(url)
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+      emit('close')
+      return
+    }
+    
+    // 如果是 blob URL，直接使用
+    if (url.startsWith('blob:')) {
+      console.log('[NodeContextMenu] blob URL 格式图片，使用前端直接下载')
+      const response = await fetch(url)
+      const blob = await response.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+      emit('close')
+      return
+    }
+    
+    // 其他 URL 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
     const { getApiUrl } = await import('@/config/tenant')
-    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl.value)}&filename=${encodeURIComponent(filename)}`)
+    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`)
     
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
@@ -405,14 +456,14 @@ async function downloadImage() {
     }
     
     const blob = await response.blob()
-    const url = window.URL.createObjectURL(blob)
+    const blobUrl = window.URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
+    a.href = blobUrl
     a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    window.URL.revokeObjectURL(url)
+    window.URL.revokeObjectURL(blobUrl)
     
     emit('close')
   } catch (error) {

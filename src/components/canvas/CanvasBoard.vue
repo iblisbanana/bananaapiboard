@@ -974,15 +974,20 @@ watch(
     const listenerOptions = { capture: true }
     
     if (isDragging) {
-      // 开始拖拽时，使用 getHandlePosition 获取源节点输出端口的精确位置
-      const sourceInfo = canvasStore.dragConnectionSource
-      if (sourceInfo?.nodeId) {
-        const handlePos = getHandlePosition(sourceInfo.nodeId, 'output')
-        dragLineStartPosition.value = handlePos
-        console.log('[CanvasBoard] 拖拽连线起始位置:', handlePos)
+      // 优先使用节点组件传入的位置（更准确，因为节点知道自己的真实尺寸）
+      // 只有当位置无效时才使用 getHandlePosition 重新计算
+      const storePos = canvasStore.dragConnectionPosition
+      if (storePos && storePos.x !== 0 && storePos.y !== 0) {
+        dragLineStartPosition.value = { ...storePos }
+        console.log('[CanvasBoard] 使用节点传入的起始位置:', storePos)
       } else {
-        // 回退：使用 store 中的位置
-        dragLineStartPosition.value = { ...canvasStore.dragConnectionPosition }
+        // 回退：使用 getHandlePosition 计算
+        const sourceInfo = canvasStore.dragConnectionSource
+        if (sourceInfo?.nodeId) {
+          const handlePos = getHandlePosition(sourceInfo.nodeId, 'output')
+          dragLineStartPosition.value = handlePos
+          console.log('[CanvasBoard] 使用计算的起始位置:', handlePos)
+        }
       }
       window.addEventListener('mousemove', handleGlobalDragConnectionMove, listenerOptions)
       window.addEventListener('mouseup', handleGlobalDragConnectionEnd, listenerOptions)
@@ -1035,6 +1040,7 @@ function handleGlobalDragConnectionEnd(event) {
 }
 
 // 获取节点端口的画布坐标
+// 注意：+号按钮位于节点卡片边缘外 52px，按钮宽度 36px，中心在边缘外 34px (52 - 18)
 function getHandlePosition(nodeId, handleType) {
   const node = canvasStore.nodes.find(n => n.id === nodeId)
   if (!node) return { x: 0, y: 0 }
@@ -1055,17 +1061,18 @@ function getHandlePosition(nodeId, handleType) {
   const nodeWidth = node.data?.width || defaults.width
   const nodeHeight = node.data?.height || defaults.height
   const labelOffset = 28 // 节点标签高度
+  const handleOffset = 34 // +号按钮中心相对于节点卡片边缘的偏移量
   
   if (handleType === 'output') {
-    // 输出端口在节点右侧中心
+    // 输出端口在节点右侧+号按钮中心位置
     return {
-      x: node.position.x + nodeWidth,
+      x: node.position.x + nodeWidth + handleOffset,
       y: node.position.y + labelOffset + nodeHeight / 2
     }
   } else {
-    // 输入端口在节点左侧中心
+    // 输入端口在节点左侧+号按钮中心位置
     return {
-      x: node.position.x,
+      x: node.position.x - handleOffset,
       y: node.position.y + labelOffset + nodeHeight / 2
     }
   }

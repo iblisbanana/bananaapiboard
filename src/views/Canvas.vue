@@ -1270,6 +1270,22 @@ onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   stopAutoSave()
   stopHistoryAutoSave()
+
+  // 清理所有 URL 对象,防止内存泄漏
+  previewUrls.value.forEach(url => {
+    try {
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.warn('[Canvas] 清理URL失败:', e)
+    }
+  })
+  previewUrls.value = []
+  imageFiles.value = []
+
+  // 清理后台任务管理器
+  if (typeof window.backgroundTaskManager?.cleanup === 'function') {
+    window.backgroundTaskManager.cleanup()
+  }
 })
 </script>
 

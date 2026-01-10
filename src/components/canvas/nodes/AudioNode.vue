@@ -962,8 +962,9 @@ function startDragConnection(event) {
   const currentNodeWidth = props.data?.width || nodeWidth.value || 420
   const currentNodeHeight = props.data?.height || nodeHeight.value || 280
   const labelOffset = 28
+  const handleOffset = 34 // +号按钮中心相对于节点卡片边缘的偏移量
   
-  const outputX = currentNode.position.x + currentNodeWidth
+  const outputX = currentNode.position.x + currentNodeWidth + handleOffset
   const outputY = currentNode.position.y + labelOffset + currentNodeHeight / 2
   
   canvasStore.startDragConnection(props.id, 'output', { x: outputX, y: outputY })
