@@ -781,7 +781,13 @@ export const getAvailableVideoModels = () => {
         durations: modelDurations,
         aspectRatios,
         supportedModes,
-        isImageToVideo: modelConfig.isImageToVideo ?? defaultConfig.isImageToVideo ?? false
+        isImageToVideo: modelConfig.isImageToVideo ?? defaultConfig.isImageToVideo ?? false,
+        // Vidu 错峰模式折扣（从后端配置读取）
+        offPeakDiscount: modelConfig.offPeakDiscount,
+        // Vidu 720P清晰度折扣（从后端配置读取）
+        resolution720Discount: modelConfig.resolution720Discount,
+        // API 类型（用于判断是否是 Vidu 模型）
+        apiType: modelConfig.apiType
       })
     }
     
@@ -850,7 +856,13 @@ export const getAvailableVideoModels = () => {
         durations: modelDurations,
         aspectRatios,
         supportedModes,
-        isImageToVideo: modelFullConfig.isImageToVideo ?? defaultConfig.isImageToVideo ?? false
+        isImageToVideo: modelFullConfig.isImageToVideo ?? defaultConfig.isImageToVideo ?? false,
+        // Vidu 错峰模式折扣（从后端配置读取）
+        offPeakDiscount: modelFullConfig.offPeakDiscount,
+        // Vidu 720P清晰度折扣（从后端配置读取）
+        resolution720Discount: modelFullConfig.resolution720Discount,
+        // API 类型（用于判断是否是 Vidu 模型）
+        apiType: modelFullConfig.apiType
       })
     }
   }

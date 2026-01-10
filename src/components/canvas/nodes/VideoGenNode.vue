@@ -31,6 +31,7 @@ const isModelDropdownOpen = ref(false)
 const selectedModel = ref(props.data.model || 'sora2')
 const selectedDuration = ref(props.data.duration || '10')
 const selectedAspectRatio = ref(props.data.aspectRatio || '16:9')
+const offPeak = ref(props.data.offPeak || false) // Vidu 错峰模式
 
 // 可用模型列表 - 从配置动态获取，过滤掉旧版模型
 const models = computed(() => {
@@ -42,6 +43,12 @@ const models = computed(() => {
 // 当前选中的模型配置
 const currentModelConfig = computed(() => {
   return models.value.find(m => m.value === selectedModel.value) || {}
+})
+
+// 当前模型是否为 Vidu 系列（支持错峰模式）
+const isViduModel = computed(() => {
+  const modelConfig = currentModelConfig.value
+  return modelConfig?.apiType === 'vidu' || selectedModel.value.toLowerCase().includes('vidu')
 })
 
 // 节点尺寸 - 视频生成节点使用16:9比例
@@ -93,15 +100,25 @@ const isImageToVideo = computed(() => inheritedImages.value.length > 0)
 const pointsCost = computed(() => {
   const currentModel = models.value.find(m => m.value === selectedModel.value)
   
+  let cost = 20
+  
   // 按时长计费的模型（Sora 2、Sora 2 Pro）
   if (currentModel?.hasDurationPricing) {
     const durationCost = currentModel.pointsCost?.[selectedDuration.value]
-    if (durationCost) return durationCost
+    if (durationCost) cost = durationCost
+  } else {
+    // 其他模型使用固定积分（VEO 3.1 系列）
+    const baseCost = currentModel?.pointsCost
+    cost = typeof baseCost === 'number' ? baseCost : 20
   }
   
-  // 其他模型使用固定积分（VEO 3.1 系列）
-  const pointsCost = currentModel?.pointsCost
-  return typeof pointsCost === 'number' ? pointsCost : 20
+  // Vidu 错峰模式折扣
+  if (isViduModel.value && offPeak.value) {
+    const discount = currentModel?.offPeakDiscount || 0.7
+    cost = Math.ceil(cost * discount)
+  }
+  
+  return cost
 })
 
 
@@ -270,7 +287,8 @@ async function handleGenerate() {
     status: 'processing',
     model: selectedModel.value,
     duration: selectedDuration.value,
-    aspectRatio: selectedAspectRatio.value
+    aspectRatio: selectedAspectRatio.value,
+    offPeak: isViduModel.value ? offPeak.value : false
   })
   
   try {
@@ -283,7 +301,8 @@ async function handleGenerate() {
         imageUrl: inheritedImages.value[0],
         model: selectedModel.value,
         duration: selectedDuration.value,
-        aspectRatio: selectedAspectRatio.value
+        aspectRatio: selectedAspectRatio.value,
+        offPeak: isViduModel.value && offPeak.value
       })
     } else {
       // 文生视频
@@ -291,7 +310,8 @@ async function handleGenerate() {
         prompt: inheritedText.value || props.data.text || '',
         model: selectedModel.value,
         duration: selectedDuration.value,
-        aspectRatio: selectedAspectRatio.value
+        aspectRatio: selectedAspectRatio.value,
+        offPeak: isViduModel.value && offPeak.value
       })
     }
     
@@ -560,6 +580,13 @@ function handleAddClick(event) {
               :value="ar.value"
             >{{ ar.label }}</option>
           </select>
+          
+          <!-- Vidu 错峰模式开关 -->
+          <label v-if="isViduModel" class="off-peak-toggle" :class="{ 'active': offPeak }">
+            <input type="checkbox" v-model="offPeak" />
+            <span class="toggle-icon">🌙</span>
+            <span class="toggle-text">{{ offPeak ? '错峰' : '错峰' }}</span>
+          </label>
         </div>
         
         <div class="gen-actions">
@@ -1037,6 +1064,45 @@ function handleAddClick(event) {
 .dropdown-fade-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+/* 错峰模式开关样式 */
+.off-peak-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--canvas-bg-secondary, #1a1a1a);
+  border: 1px solid var(--canvas-border-subtle, #3a3a3a);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  font-size: 11px;
+  color: var(--canvas-text-secondary, #a0a0a0);
+}
+
+.off-peak-toggle input {
+  display: none;
+}
+
+.off-peak-toggle:hover {
+  border-color: var(--canvas-border-default, #4a4a4a);
+}
+
+.off-peak-toggle.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: rgb(165, 180, 252);
+}
+
+.off-peak-toggle .toggle-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.off-peak-toggle .toggle-text {
+  font-weight: 500;
 }
 </style>
 

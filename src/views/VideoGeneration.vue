@@ -11,12 +11,20 @@ const model = ref('sora2')  // 默认使用新版 sora2 整合模型
 const aspectRatio = ref('16:9')
 const duration = ref('10')
 const hd = ref(false)
+const offPeak = ref(false) // Vidu 错峰模式
+const resolution = ref('1080p') // Vidu 清晰度选项
 
 // VEO3模型列表（不支持时长参数）
 const VEO3_MODELS = ['veo3.1-components', 'veo3.1', 'veo3.1-pro']
 
 // 当前模型是否为VEO3系列
 const isVeo3Model = computed(() => VEO3_MODELS.includes(model.value))
+
+// 当前模型是否为Vidu系列（支持错峰模式）
+const isViduModel = computed(() => {
+  const modelConfig = currentModelConfig.value
+  return modelConfig?.apiType === 'vidu' || model.value.toLowerCase().includes('vidu')
+})
 
 // 当前选中模型的配置
 const currentModelConfig = computed(() => {
@@ -128,6 +136,21 @@ const currentPointsCost = computed(() => {
   if (hd.value && pointsCostConfig.value.hd_extra) {
     cost += pointsCostConfig.value.hd_extra
   }
+  
+  // Vidu 720P清晰度折扣
+  if (isViduModel.value && resolution.value === '720p') {
+    const modelCfg = currentModelConfig.value
+    const discount = modelCfg?.resolution720Discount || 0.7 // 默认70%折扣
+    cost = Math.ceil(cost * discount)
+  }
+  
+  // Vidu 错峰模式折扣
+  if (isViduModel.value && offPeak.value) {
+    const modelCfg = currentModelConfig.value
+    const discount = modelCfg?.offPeakDiscount || 0.7 // 默认70%折扣
+    cost = Math.ceil(cost * discount)
+  }
+  
   return cost
 })
 
@@ -388,6 +411,16 @@ async function generateVideo() {
     formData.append('watermark', watermark.value ? 'true' : 'false')
     formData.append('private', isPrivate.value ? 'true' : 'false')
     
+    // Vidu 错峰模式
+    if (isViduModel.value && offPeak.value) {
+      formData.append('off_peak', 'true')
+    }
+    
+    // Vidu 清晰度
+    if (isViduModel.value) {
+      formData.append('resolution', resolution.value)
+    }
+    
     if (mode.value === 'image') {
       for (const file of imageFiles.value) {
         formData.append('images', file)
@@ -401,7 +434,9 @@ async function generateVideo() {
       duration: currentDuration,
       hd: hd.value,
       mode: mode.value,
-      imageCount: imageFiles.value.length
+      imageCount: imageFiles.value.length,
+      resolution: isViduModel.value ? resolution.value : undefined,
+      offPeak: isViduModel.value ? offPeak.value : undefined
     })
     
     const token = localStorage.getItem('token')
@@ -443,6 +478,9 @@ async function generateVideo() {
     const taskId = data.task_id || data.id || crypto.randomUUID()
     console.log('[video] 任务ID:', taskId)
     
+    // 判断是否是错峰模式任务
+    const isOffPeakTask = isViduModel.value && offPeak.value
+    
     const task = {
       id: taskId,
       task_id: taskId,
@@ -455,7 +493,8 @@ async function generateVideo() {
       created_at: Date.now(),
       video_url: data.video_url || null,
       points_cost: pointsCost,
-      fail_reason: null // 初始化失败原因
+      fail_reason: null, // 初始化失败原因
+      off_peak: isOffPeakTask ? 1 : 0 // 记录是否为错峰模式
     }
     
     console.log('[video] 创建任务对象:', task)
@@ -464,8 +503,9 @@ async function generateVideo() {
     history.value.unshift(task)
     console.log('[video] 已添加到历史记录')
     
-    startPolling(taskId)
-    console.log('[video] 已启动轮询')
+    // 🔥 错峰模式使用特殊轮询策略
+    startPolling(taskId, isOffPeakTask, Date.now())
+    console.log('[video] 已启动轮询, 错峰模式:', isOffPeakTask)
     
     successMessage.value = '任务已提交，请在历史记录中查看进度'
     console.log('[video] 刷新用户信息')
@@ -526,27 +566,57 @@ function mergeTaskUpdate(taskId, update) {
   apply(history.value)
 }
 
-function startPolling(taskId) {
+// 计算错峰模式的轮询间隔
+function getOffPeakPollInterval(taskCreatedAt) {
+  const elapsed = Date.now() - taskCreatedAt
+  const ONE_HOUR = 60 * 60 * 1000
+  
+  if (elapsed < ONE_HOUR) {
+    // 前1小时：正常轮询（5秒）
+    return 5000
+  } else {
+    // 1小时后：每10分钟轮询一次
+    return 10 * 60 * 1000
+  }
+}
+
+function startPolling(taskId, isOffPeakTask = false, taskCreatedAt = null) {
   if (!taskId || pollingTimers.has(taskId)) return
   
-  const timer = setInterval(async () => {
+  const startTime = taskCreatedAt || Date.now()
+  const ONE_HOUR = 60 * 60 * 1000
+  const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000
+  
+  // 错峰模式使用动态轮询，普通模式使用固定间隔
+  const scheduleNextPoll = () => {
+    const interval = isOffPeakTask ? getOffPeakPollInterval(startTime) : 4000
+    if (isOffPeakTask) {
+      console.log(`[VideoGeneration] 错峰模式轮询 | 已过: ${Math.round((Date.now() - startTime) / 60000)}分钟 | 下次间隔: ${interval / 1000}秒`)
+    }
+    const timer = setTimeout(pollTask, interval)
+    pollingTimers.set(taskId, timer)
+  }
+  
+  const pollTask = async () => {
     const taskData = await fetchTask(taskId)
-    if (!taskData) return
+    if (!taskData) {
+      scheduleNextPoll()
+      return
+    }
     
-    // 检查超时（1小时 = 3600000毫秒）
-    const createdAt = taskData.created_at || Date.now()
+    // 检查超时
+    const createdAt = taskData.created_at || startTime
     const elapsed = Date.now() - createdAt
-    const ONE_HOUR = 60 * 60 * 1000
+    const maxTime = isOffPeakTask ? FORTY_EIGHT_HOURS : ONE_HOUR
     
-    // 如果超过1小时且还在处理中，标记为失败
-    if (elapsed > ONE_HOUR && isProcessingStatus(taskData.status)) {
-      console.log(`[VideoGeneration] 任务超时: ${taskId}, 已运行 ${Math.floor(elapsed / 1000 / 60)} 分钟`)
+    // 如果超时且还在处理中，标记为失败
+    if (elapsed > maxTime && isProcessingStatus(taskData.status)) {
+      console.log(`[VideoGeneration] 任务超时: ${taskId}, 已运行 ${Math.floor(elapsed / 1000 / 60)} 分钟, 错峰模式: ${isOffPeakTask}`)
       mergeTaskUpdate(taskId, {
         status: 'timeout',
         progress: '生成超时',
-        fail_reason: '生成超时（超过1小时），未扣除积分'
+        fail_reason: isOffPeakTask ? '错峰模式生成超时（48小时）' : '生成超时（超过1小时），未扣除积分'
       })
-      clearInterval(timer)
       pollingTimers.delete(taskId)
       return
     }
@@ -560,12 +630,16 @@ function startPolling(taskId) {
     
     // 如果任务已完成或失败，停止轮询
     if (isCompletedStatus(taskData.status) || isFailedStatus(taskData.status)) {
-      clearInterval(timer)
       pollingTimers.delete(taskId)
       refreshUser()
+    } else {
+      // 继续轮询
+      scheduleNextPoll()
     }
-  }, 4000)
-  pollingTimers.set(taskId, timer)
+  }
+  
+  // 开始第一次轮询
+  pollTask()
 }
 
 async function loadHistory() {
@@ -606,6 +680,7 @@ async function loadHistory() {
       console.log(`[VideoGeneration] 历史记录过多(${allVideos.length}),已限制为${MAX_HISTORY}条`)
     }
 
+    const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000
     const videos = limitedVideos.map(item => {
       const video = {
         ...item,
@@ -613,15 +688,17 @@ async function loadHistory() {
         created_at: item.created_at || item.created
       }
 
-      // 检查超时：如果超过1小时且还在处理中，标记为超时失败
+      // 检查超时：错峰模式48小时，普通模式1小时
       const createdAt = video.created_at || 0
       const elapsed = now - createdAt
+      const isOffPeakTask = video.off_peak === 1 || video.off_peak === true
+      const maxTime = isOffPeakTask ? FORTY_EIGHT_HOURS : ONE_HOUR
 
-      if (elapsed > ONE_HOUR && isProcessingStatus(video.status)) {
-        console.log(`[VideoGeneration] 发现超时任务: ${video.id}, 已运行 ${Math.floor(elapsed / 1000 / 60)} 分钟`)
+      if (elapsed > maxTime && isProcessingStatus(video.status)) {
+        console.log(`[VideoGeneration] 发现超时任务: ${video.id}, 已运行 ${Math.floor(elapsed / 1000 / 60)} 分钟, 错峰模式: ${isOffPeakTask}`)
         video.status = 'timeout'
         video.progress = '生成超时'
-        video.fail_reason = '生成超时（超过1小时），未扣除积分'
+        video.fail_reason = isOffPeakTask ? '错峰模式生成超时（48小时）' : '生成超时（超过1小时），未扣除积分'
       }
 
       return video
@@ -637,19 +714,23 @@ async function loadHistory() {
     console.log('[VideoGeneration] 历史记录已加载，输出库保持空状态（显示"开始创作"）')
 
     // 对 history 中的未完成任务启动轮询（且未超时）- 限制数量
+    // 错峰模式任务允许48小时，普通任务1小时
     const MAX_POLLING_TASKS = 5
     const pendingTasks = videos.filter(item => {
       const createdAt = item.created_at || 0
       const elapsed = now - createdAt
-      return isProcessingStatus(item.status) && elapsed <= ONE_HOUR
+      const isOffPeakTask = item.off_peak === 1 || item.off_peak === true
+      const maxTime = isOffPeakTask ? FORTY_EIGHT_HOURS : ONE_HOUR
+      return isProcessingStatus(item.status) && elapsed <= maxTime
     }).slice(0, MAX_POLLING_TASKS)
 
     console.log('[VideoGeneration] 未完成任务数:', pendingTasks.length, '个(已限制最多', MAX_POLLING_TASKS, '个)')
 
     pendingTasks.forEach(task => {
       if (task.task_id) {
-        console.log('[VideoGeneration] 启动轮询:', task.task_id)
-        startPolling(task.task_id)
+        const isOffPeakTask = task.off_peak === 1 || task.off_peak === true
+        console.log('[VideoGeneration] 启动轮询:', task.task_id, '错峰模式:', isOffPeakTask)
+        startPolling(task.task_id, isOffPeakTask, task.created_at)
       }
     })
   } catch (e) {
@@ -888,6 +969,13 @@ watch(model, (newModel) => {
     hd.value = false
   }
   
+  // 切换到非 Vidu 模型时自动关闭错峰模式
+  const modelCfg = availableModels.value.find(m => m.value === newModel)
+  const isVidu = modelCfg?.apiType === 'vidu' || newModel.toLowerCase().includes('vidu')
+  if (!isVidu && offPeak.value) {
+    offPeak.value = false
+  }
+  
   // VEO3模型不需要时长选项
   if (VEO3_MODELS.includes(newModel)) {
     console.log('[VideoGeneration] VEO3模型不支持时长选择')
@@ -1057,6 +1145,65 @@ onUnmounted(() => {
                   {{ dur }} 秒
                 </option>
               </select>
+            </div>
+
+            <!-- Vidu 错峰模式开关 -->
+            <div v-if="isViduModel">
+              <label class="flex items-center space-x-1 text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                <span>🌙</span>
+                <span>错峰模式</span>
+              </label>
+              <div class="flex items-center space-x-3 p-2.5 bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" v-model="offPeak" class="sr-only peer" />
+                  <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+                </label>
+                <div class="flex-1">
+                  <p class="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                    {{ offPeak ? '已开启' : '已关闭' }}
+                  </p>
+                  <p class="text-xs text-indigo-600 dark:text-indigo-400 opacity-80">
+                    {{ offPeak ? '享受错峰优惠，生成时间可能稍长' : '开启后可享受积分折扣' }}
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Vidu 清晰度选择 -->
+            <div v-if="isViduModel">
+              <label class="flex items-center space-x-1 text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                <span>📺</span>
+                <span>清晰度</span>
+              </label>
+              <div class="flex space-x-2">
+                <button
+                  type="button"
+                  @click="resolution = '720p'"
+                  :class="[
+                    'flex-1 py-2 px-3 text-sm font-medium rounded-lg border transition-all',
+                    resolution === '720p'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-emerald-400'
+                  ]"
+                >
+                  720P
+                  <span v-if="currentModelConfig?.resolution720Discount" class="ml-1 text-xs opacity-80">
+                    ({{ Math.round(currentModelConfig.resolution720Discount * 100) }}%价格)
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  @click="resolution = '1080p'"
+                  :class="[
+                    'flex-1 py-2 px-3 text-sm font-medium rounded-lg border transition-all',
+                    resolution === '1080p'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-emerald-400'
+                  ]"
+                >
+                  1080P
+                </button>
+              </div>
             </div>
             
             <!-- VEO3模型提示（仅在图生视频模式下显示） -->

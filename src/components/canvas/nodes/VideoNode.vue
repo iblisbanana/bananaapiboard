@@ -245,6 +245,12 @@ const isViduModel = computed(() => {
 // Vidu 图生视频模式选择
 const viduMode = ref(props.data.viduMode || 'auto')  // auto, i2v, start-end, reference
 
+// Vidu 错峰模式
+const viduOffPeak = ref(props.data.viduOffPeak || false)
+
+// Vidu 清晰度选择
+const viduResolution = ref(props.data.viduResolution || '1080p')
+
 // Vidu 模式选项
 const VIDU_MODE_OPTIONS = [
   { value: 'auto', label: '自动选择', description: '根据图片数量自动选择', maxImages: 7 },
@@ -715,14 +721,29 @@ const hasUpstreamText = computed(() => {
 // 积分消耗计算（从模型配置中读取）
 const pointsCost = computed(() => {
   const modelPointsCost = currentModelConfig.value.pointsCost
+  let cost = 1
   
   // 如果是按时长计费的模型
   if (currentModelConfig.value.hasDurationPricing && typeof modelPointsCost === 'object') {
-    return modelPointsCost[selectedDuration.value] || 20
+    cost = modelPointsCost[selectedDuration.value] || 20
+  } else {
+    // 固定积分模型
+    cost = typeof modelPointsCost === 'number' ? modelPointsCost : 1
   }
   
-  // 固定积分模型
-  return typeof modelPointsCost === 'number' ? modelPointsCost : 1
+  // Vidu 720P清晰度折扣
+  if (isViduModel.value && viduResolution.value === '720p') {
+    const discount = currentModelConfig.value.resolution720Discount || 0.7
+    cost = Math.ceil(cost * discount)
+  }
+  
+  // Vidu 错峰模式折扣
+  if (isViduModel.value && viduOffPeak.value) {
+    const discount = currentModelConfig.value.offPeakDiscount || 0.7
+    cost = Math.ceil(cost * discount)
+  }
+  
+  return cost
 })
 
 
@@ -905,15 +926,17 @@ function handleKeyframesToVideo() {
 }
 
 // 监听参数变化，保存到store
-watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, promptText, generationMode], 
-  ([model, aspectRatio, duration, count, prompt, mode]) => {
+watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, promptText, generationMode, viduOffPeak, viduResolution], 
+  ([model, aspectRatio, duration, count, prompt, mode, offPeak, resolution]) => {
     canvasStore.updateNodeData(props.id, {
       model,
       aspectRatio,
       duration,
       count,
       prompt,
-      generationMode: mode
+      generationMode: mode,
+      viduOffPeak: offPeak,
+      viduResolution: resolution
     })
   }
 )
@@ -1127,6 +1150,18 @@ async function sendGenerateRequest(finalPrompt, finalImages) {
     console.log('[VideoNode] Vidu 模式参数:', viduMode.value)
   }
   
+  // Vidu 模型特有参数：错峰模式
+  if (isViduModel.value && viduOffPeak.value) {
+    formData.append('off_peak', 'true')
+    console.log('[VideoNode] Vidu 错峰模式已开启')
+  }
+  
+  // Vidu 模型特有参数：清晰度
+  if (isViduModel.value) {
+    formData.append('resolution', viduResolution.value)
+    console.log('[VideoNode] Vidu 清晰度:', viduResolution.value)
+  }
+  
   // 如果有参考图片，添加图片 URL
   if (finalImages.length > 0) {
     for (const imageUrl of finalImages) {
@@ -1232,7 +1267,9 @@ async function executeNodeGeneration(nodeId, finalPrompt, finalImages, taskIndex
       })
       
       // 后台轮询，不阻塞
-      pollVideoTaskForNode(taskId, nodeId).catch(error => {
+      // 🔥 错峰模式传入特殊轮询策略参数
+      const isOffPeakTask = isViduModel.value && viduOffPeak.value
+      pollVideoTaskForNode(taskId, nodeId, isOffPeakTask, Date.now()).catch(error => {
         console.error(`[VideoNode] 任务 ${taskIndex + 1} 轮询失败:`, error)
         canvasStore.updateNodeData(nodeId, {
           status: 'error',
@@ -1264,12 +1301,27 @@ async function executeNodeGeneration(nodeId, finalPrompt, finalImages, taskIndex
   }
 }
 
+// 计算错峰模式的轮询间隔
+function getOffPeakPollInterval(taskCreatedAt) {
+  const elapsed = Date.now() - taskCreatedAt
+  const ONE_HOUR = 60 * 60 * 1000
+  
+  if (elapsed < ONE_HOUR) {
+    // 前1小时：正常轮询（5秒）
+    return 5000
+  } else {
+    // 1小时后：每10分钟轮询一次
+    return 10 * 60 * 1000
+  }
+}
+
 // 轮询视频任务状态（针对特定节点）
-async function pollVideoTaskForNode(taskId, nodeId) {
+async function pollVideoTaskForNode(taskId, nodeId, isOffPeak = false, taskCreatedAt = null) {
   const token = localStorage.getItem('token')
-  const MAX_POLL_TIME = 600000 // 10分钟超时
-  const POLL_INTERVAL = 4000 // 4秒轮询一次
-  const startTime = Date.now()
+  // 错峰模式：最长48小时；普通模式：10分钟
+  const MAX_POLL_TIME = isOffPeak ? 48 * 60 * 60 * 1000 : 600000
+  const NORMAL_POLL_INTERVAL = 4000 // 普通模式4秒轮询一次
+  const startTime = taskCreatedAt || Date.now()
   
   return new Promise((resolve, reject) => {
     // 轮询状态：用于处理临时URL等待云存储URL的场景
@@ -1282,9 +1334,12 @@ async function pollVideoTaskForNode(taskId, nodeId) {
       try {
         // 检查超时
         if (Date.now() - startTime > MAX_POLL_TIME) {
-          reject(new Error('生成超时，请稍后在历史记录中查看'))
+          reject(new Error(isOffPeak ? '错峰模式生成超时（48小时），请联系客服' : '生成超时，请稍后在历史记录中查看'))
           return
         }
+        
+        // 计算本次轮询间隔
+        const pollInterval = isOffPeak ? getOffPeakPollInterval(startTime) : NORMAL_POLL_INTERVAL
         
         const response = await fetch(`/api/videos/task/${taskId}`, {
           headers: { 
@@ -1323,7 +1378,7 @@ async function pollVideoTaskForNode(taskId, nodeId) {
               // 最多额外等待3次（约12秒），让后端完成异步上传
               if (pollState.cloudUrlWaitCount <= 3) {
                 console.log(`[VideoNode] 检测到临时URL，等待云存储URL (第${pollState.cloudUrlWaitCount}次)...`)
-                setTimeout(poll, POLL_INTERVAL)
+                setTimeout(poll, pollInterval)
                 return
               }
               pollState.waitedForCloudUrl = true
@@ -1351,8 +1406,14 @@ async function pollVideoTaskForNode(taskId, nodeId) {
           return
         }
         
-        // 继续轮询
-        setTimeout(poll, POLL_INTERVAL)
+        // 继续轮询（错峰模式会动态调整间隔）
+        if (isOffPeak) {
+          const nextInterval = getOffPeakPollInterval(startTime)
+          console.log(`[VideoNode] 错峰模式轮询 | 已过: ${Math.round((Date.now() - startTime) / 60000)}分钟 | 下次间隔: ${nextInterval / 1000}秒`)
+          setTimeout(poll, nextInterval)
+        } else {
+          setTimeout(poll, pollInterval)
+        }
         
       } catch (error) {
         reject(error)
@@ -1525,11 +1586,12 @@ async function handleGenerate() {
 }
 
 // 轮询视频任务状态
-async function pollVideoTask(taskId) {
+async function pollVideoTask(taskId, isOffPeak = false, taskCreatedAt = null) {
   const token = localStorage.getItem('token')
-  const MAX_POLL_TIME = 600000 // 10分钟超时
-  const POLL_INTERVAL = 4000 // 4秒轮询一次
-  const startTime = Date.now()
+  // 错峰模式：最长48小时；普通模式：10分钟
+  const MAX_POLL_TIME = isOffPeak ? 48 * 60 * 60 * 1000 : 600000
+  const NORMAL_POLL_INTERVAL = 4000 // 普通模式4秒轮询一次
+  const startTime = taskCreatedAt || Date.now()
   
   // 轮询状态：用于处理临时URL等待云存储URL的场景
   const pollState = {
@@ -1539,9 +1601,12 @@ async function pollVideoTask(taskId) {
   
   const poll = async () => {
     try {
+      // 计算本次轮询间隔
+      const pollInterval = isOffPeak ? getOffPeakPollInterval(startTime) : NORMAL_POLL_INTERVAL
+      
       // 检查超时
       if (Date.now() - startTime > MAX_POLL_TIME) {
-        throw new Error('生成超时，请稍后在历史记录中查看')
+        throw new Error(isOffPeak ? '错峰模式生成超时（48小时），请联系客服' : '生成超时，请稍后在历史记录中查看')
       }
       
       const response = await fetch(`/api/videos/task/${taskId}`, {
@@ -1578,7 +1643,7 @@ async function pollVideoTask(taskId) {
             pollState.cloudUrlWaitCount++
             if (pollState.cloudUrlWaitCount <= 3) {
               console.log(`[VideoNode] 检测到临时URL，等待云存储URL (第${pollState.cloudUrlWaitCount}次)...`)
-              setTimeout(poll, POLL_INTERVAL)
+              setTimeout(poll, pollInterval)
               return
             }
             pollState.waitedForCloudUrl = true
@@ -1605,8 +1670,14 @@ async function pollVideoTask(taskId) {
         throw new Error(data.fail_reason || '视频生成失败')
       }
       
-      // 继续轮询
-      setTimeout(poll, POLL_INTERVAL)
+      // 继续轮询（错峰模式会动态调整间隔）
+      if (isOffPeak) {
+        const nextInterval = getOffPeakPollInterval(startTime)
+        console.log(`[VideoNode] 错峰模式轮询 | 已过: ${Math.round((Date.now() - startTime) / 60000)}分钟 | 下次间隔: ${nextInterval / 1000}秒`)
+        setTimeout(poll, nextInterval)
+      } else {
+        setTimeout(poll, pollInterval)
+      }
       
     } catch (error) {
       console.error('[VideoNode] 轮询失败:', error)
@@ -3523,6 +3594,29 @@ function handleToolbarPreview() {
               {{ d.label }}
             </div>
           </div>
+          
+          <!-- Vidu 错峰模式开关 -->
+          <label 
+            v-if="isViduModel" 
+            class="off-peak-toggle" 
+            :class="{ active: viduOffPeak }"
+            title="开启后享受折扣，但生成时间会有所延长，高峰时需要等位"
+          >
+            <input type="checkbox" v-model="viduOffPeak" />
+            <span class="toggle-icon">🌙</span>
+            <span class="toggle-text">错峰</span>
+          </label>
+          
+          <!-- Vidu 清晰度切换 -->
+          <div 
+            v-if="isViduModel" 
+            class="resolution-chip"
+            :class="{ 'is-720p': viduResolution === '720p' }"
+            @click="viduResolution = viduResolution === '1080p' ? '720p' : '1080p'"
+            :title="viduResolution === '1080p' ? '点击切换到720P（享受折扣）' : '点击切换到1080P（高清）'"
+          >
+            {{ viduResolution === '1080p' ? '1080P' : '720P' }}
+          </div>
         </div>
         
         <div class="config-right">
@@ -4811,6 +4905,112 @@ function handleToolbarPreview() {
 .param-chip-group {
   display: flex;
   gap: 6px;
+}
+
+/* Vidu 错峰模式开关 */
+.off-peak-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  min-height: 32px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.off-peak-toggle input {
+  display: none;
+}
+
+.off-peak-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.off-peak-toggle.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: rgb(165, 180, 252);
+}
+
+.off-peak-toggle .toggle-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Vidu 清晰度切换 */
+.resolution-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+  min-height: 32px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.resolution-chip:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.resolution-chip.is-720p {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: rgb(110, 231, 183);
+}
+
+/* 白昼模式 - 清晰度切换 */
+:root.canvas-theme-light .video-node .resolution-chip {
+  background: transparent;
+  border-color: rgba(0, 0, 0, 0.2);
+  color: rgba(0, 0, 0, 0.6);
+}
+
+:root.canvas-theme-light .video-node .resolution-chip:hover {
+  border-color: rgba(0, 0, 0, 0.35);
+  color: rgba(0, 0, 0, 0.8);
+}
+
+:root.canvas-theme-light .video-node .resolution-chip.is-720p {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: rgb(5, 150, 105);
+}
+
+.off-peak-toggle .toggle-text {
+  font-weight: 500;
+}
+
+/* 白昼模式 - 错峰开关 */
+:root.canvas-theme-light .video-node .off-peak-toggle {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.5);
+}
+
+:root.canvas-theme-light .video-node .off-peak-toggle:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+:root.canvas-theme-light .video-node .off-peak-toggle.active {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #6366f1;
 }
 
 .count-display {

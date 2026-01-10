@@ -348,6 +348,11 @@ onNodeDragStop((event) => {
   if (node.type === 'group' && node.data?.nodeIds) {
     syncGroupChildrenPositions(node)
   }
+  
+  // 如果拖拽的是组内节点，最终调整组大小和偏移量
+  if (node.type !== 'group' && node.data?.groupId) {
+    adjustGroupSizeForNode(node)
+  }
 })
 
 // 处理节点拖拽中（实时同步）
@@ -358,7 +363,127 @@ onNodeDrag((event) => {
   if (node.type === 'group' && node.data?.nodeIds && node.data?.nodeOffsets) {
     syncGroupChildrenPositions(node)
   }
+  
+  // 如果拖拽的是组内节点，自动调整组的大小
+  if (node.type !== 'group' && node.data?.groupId) {
+    adjustGroupSizeForNode(node)
+  }
 })
+
+// 调整组大小以包含被拖拽的节点（只扩展不缩小）
+function adjustGroupSizeForNode(node) {
+  const groupId = node.data.groupId
+  const groupNode = canvasStore.nodes.find(n => n.id === groupId)
+  
+  if (!groupNode || groupNode.type !== 'group') return
+  
+  const nodeIds = groupNode.data.nodeIds || []
+  const padding = 20 // 边距
+  
+  // 获取当前组的位置和尺寸
+  const currentGroupX = groupNode.position.x
+  const currentGroupY = groupNode.position.y
+  const currentGroupWidth = groupNode.data.width || 400
+  const currentGroupHeight = groupNode.data.height || 300
+  const currentGroupRight = currentGroupX + currentGroupWidth
+  const currentGroupBottom = currentGroupY + currentGroupHeight
+  
+  // 计算组内所有节点需要的边界
+  let requiredMinX = Infinity, requiredMinY = Infinity
+  let requiredMaxX = -Infinity, requiredMaxY = -Infinity
+  
+  nodeIds.forEach(nodeId => {
+    const childNode = canvasStore.nodes.find(n => n.id === nodeId)
+    if (childNode) {
+      const x = childNode.position.x
+      const y = childNode.position.y
+      const w = childNode.dimensions?.width || childNode.data?.width || 380
+      const h = childNode.dimensions?.height || childNode.data?.height || 320
+      
+      requiredMinX = Math.min(requiredMinX, x - padding)
+      requiredMinY = Math.min(requiredMinY, y - padding)
+      requiredMaxX = Math.max(requiredMaxX, x + w + padding)
+      requiredMaxY = Math.max(requiredMaxY, y + h + padding)
+    }
+  })
+  
+  // 只在节点超出当前组边界时才扩展（不缩小）
+  let needsUpdate = false
+  let newX = currentGroupX
+  let newY = currentGroupY
+  let newWidth = currentGroupWidth
+  let newHeight = currentGroupHeight
+  
+  // 检查左边界
+  if (requiredMinX < currentGroupX) {
+    newX = requiredMinX
+    newWidth = currentGroupRight - requiredMinX
+    needsUpdate = true
+  }
+  
+  // 检查上边界
+  if (requiredMinY < currentGroupY) {
+    newY = requiredMinY
+    newHeight = currentGroupBottom - requiredMinY
+    needsUpdate = true
+  }
+  
+  // 检查右边界
+  if (requiredMaxX > currentGroupRight) {
+    newWidth = requiredMaxX - newX
+    needsUpdate = true
+  }
+  
+  // 检查下边界
+  if (requiredMaxY > currentGroupBottom) {
+    newHeight = requiredMaxY - newY
+    needsUpdate = true
+  }
+  
+  // 只有需要扩展时才更新
+  if (needsUpdate) {
+    const newPosition = { x: newX, y: newY }
+    
+    // 更新组的位置和尺寸
+    groupNode.position = newPosition
+    canvasStore.updateNodeData(groupId, {
+      width: newWidth,
+      height: newHeight
+    })
+    
+    // 更新所有节点相对于组的偏移量
+    const newOffsets = {}
+    nodeIds.forEach(nodeId => {
+      const childNode = canvasStore.nodes.find(n => n.id === nodeId)
+      if (childNode) {
+        newOffsets[nodeId] = {
+          x: childNode.position.x - newPosition.x,
+          y: childNode.position.y - newPosition.y
+        }
+      }
+    })
+    
+    canvasStore.updateNodeData(groupId, {
+      nodeOffsets: newOffsets
+    })
+  } else {
+    // 即使组大小不变，也需要更新节点的偏移量
+    const newOffsets = {}
+    nodeIds.forEach(nodeId => {
+      const childNode = canvasStore.nodes.find(n => n.id === nodeId)
+      if (childNode) {
+        newOffsets[nodeId] = {
+          x: childNode.position.x - groupNode.position.x,
+          y: childNode.position.y - groupNode.position.y
+        }
+      }
+    })
+    
+    canvasStore.updateNodeData(groupId, {
+      nodeOffsets: newOffsets
+    })
+  }
+}
 
 // 同步编组内节点位置
 function syncGroupChildrenPositions(groupNode) {
@@ -823,8 +948,8 @@ function groupSelectedNodes() {
           x: node.position.x - minX,
           y: node.position.y - minY
         }
-        // 锁定节点，不能单独拖动
-        node.draggable = false
+        // 保持节点可拖拽（在组内自由移动）
+        node.draggable = true
         // 设置节点的 zIndex 为正数，确保在编组框之上
         node.zIndex = 1
         node.style = { ...node.style, zIndex: 1 }

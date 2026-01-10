@@ -45,7 +45,10 @@ watch(() => props.data.height, (newHeight) => {
 // 缩放状态
 const isResizing = ref(false)
 const resizeHandle = ref(null) // 'se' | 'sw' | 'ne' | 'nw' | 'e' | 'w' | 's' | 'n'
-const resizeStart = ref({ x: 0, y: 0, width: 0, height: 0 })
+const resizeStart = ref({ x: 0, y: 0, width: 0, height: 0, nodeX: 0, nodeY: 0 })
+
+// 悬停状态
+const isHovered = ref(false)
 
 // 内联编辑状态
 const isEditing = ref(false)
@@ -124,13 +127,19 @@ function startResize(event, handle) {
   event.stopPropagation()
   event.preventDefault()
   
+  // 获取当前节点的位置
+  const node = canvasStore.nodes.find(n => n.id === props.id)
+  const nodePosition = node?.position || { x: 0, y: 0 }
+  
   isResizing.value = true
   resizeHandle.value = handle
   resizeStart.value = {
     x: event.clientX,
     y: event.clientY,
     width: width.value,
-    height: height.value
+    height: height.value,
+    nodeX: nodePosition.x,
+    nodeY: nodePosition.y
   }
   
   document.addEventListener('mousemove', handleResize)
@@ -141,27 +150,35 @@ function startResize(event, handle) {
 function handleResize(event) {
   if (!isResizing.value) return
   
-  const deltaX = event.clientX - resizeStart.value.x
-  const deltaY = event.clientY - resizeStart.value.y
+  // 考虑视口缩放比例
+  const zoom = canvasStore.viewport?.zoom || 1
+  const deltaX = (event.clientX - resizeStart.value.x) / zoom
+  const deltaY = (event.clientY - resizeStart.value.y) / zoom
   
   const minWidth = 200
   const minHeight = 150
   
   let newWidth = resizeStart.value.width
   let newHeight = resizeStart.value.height
+  let newX = resizeStart.value.nodeX
+  let newY = resizeStart.value.nodeY
   
-  // 根据拖拽的边角计算新尺寸
+  // 根据拖拽的边角计算新尺寸和位置
   if (resizeHandle.value.includes('e')) {
     newWidth = Math.max(minWidth, resizeStart.value.width + deltaX)
   }
   if (resizeHandle.value.includes('w')) {
-    newWidth = Math.max(minWidth, resizeStart.value.width - deltaX)
+    const widthChange = Math.min(deltaX, resizeStart.value.width - minWidth)
+    newWidth = resizeStart.value.width - widthChange
+    newX = resizeStart.value.nodeX + widthChange
   }
   if (resizeHandle.value.includes('s')) {
     newHeight = Math.max(minHeight, resizeStart.value.height + deltaY)
   }
   if (resizeHandle.value.includes('n')) {
-    newHeight = Math.max(minHeight, resizeStart.value.height - deltaY)
+    const heightChange = Math.min(deltaY, resizeStart.value.height - minHeight)
+    newHeight = resizeStart.value.height - heightChange
+    newY = resizeStart.value.nodeY + heightChange
   }
   
   width.value = newWidth
@@ -172,6 +189,15 @@ function handleResize(event) {
     width: newWidth,
     height: newHeight
   })
+  
+  // 如果拖拽的是左边或上边，还需要更新位置
+  if (resizeHandle.value.includes('w') || resizeHandle.value.includes('n')) {
+    const node = canvasStore.nodes.find(n => n.id === props.id)
+    if (node) {
+      node.position = { x: newX, y: newY }
+      canvasStore.updateNodePosition(props.id, { x: newX, y: newY })
+    }
+  }
 }
 
 // 停止缩放
@@ -203,6 +229,8 @@ onUnmounted(() => {
       padding: '0'
     }"
     @dblclick="handleDoubleClick"
+    @mouseenter="isHovered = true"
+    @mouseleave="isHovered = false"
   >
     <!-- 编组标题（左上角）- 简洁文字样式，无边框无按钮 -->
     <div class="group-header">
@@ -225,8 +253,8 @@ onUnmounted(() => {
       >{{ groupName }}</span>
     </div>
     
-    <!-- 缩放手柄（选中时显示） -->
-    <template v-if="selected">
+    <!-- 缩放手柄（选中或悬停时显示） -->
+    <template v-if="selected || isHovered">
       <!-- 四个角 -->
       <div class="resize-handle resize-nw" @mousedown="startResize($event, 'nw')"></div>
       <div class="resize-handle resize-ne" @mousedown="startResize($event, 'ne')"></div>

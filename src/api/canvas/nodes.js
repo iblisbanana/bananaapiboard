@@ -103,7 +103,7 @@ export async function generateImageFromImage(params) {
  * 视频生成 - 文生视频
  */
 export async function generateVideoFromText(params) {
-  const { prompt, model = 'sora-2', aspectRatio = '16:9', duration = '10' } = params
+  const { prompt, model = 'sora-2', aspectRatio = '16:9', duration = '10', offPeak = false } = params
   
   const body = {
     prompt,
@@ -112,7 +112,12 @@ export async function generateVideoFromText(params) {
     duration
   }
   
-  const response = await fetch(getApiUrl('/api/video/generate'), {
+  // Vidu 错峰模式
+  if (offPeak) {
+    body.off_peak = true
+  }
+  
+  const response = await fetch(getApiUrl('/api/videos/generate'), {
     method: 'POST',
     headers: getHeaders({ json: true }),
     body: JSON.stringify(body)
@@ -130,7 +135,7 @@ export async function generateVideoFromText(params) {
  * 视频生成 - 图生视频
  */
 export async function generateVideoFromImage(params) {
-  const { prompt, imageUrl, model = 'sora-2', aspectRatio = '16:9', duration = '10' } = params
+  const { prompt, imageUrl, model = 'sora-2', aspectRatio = '16:9', duration = '10', offPeak = false } = params
   
   const body = {
     prompt,
@@ -140,7 +145,12 @@ export async function generateVideoFromImage(params) {
     duration
   }
   
-  const response = await fetch(getApiUrl('/api/video/generate'), {
+  // Vidu 错峰模式
+  if (offPeak) {
+    body.off_peak = true
+  }
+  
+  const response = await fetch(getApiUrl('/api/videos/generate'), {
     method: 'POST',
     headers: getHeaders({ json: true }),
     body: JSON.stringify(body)
