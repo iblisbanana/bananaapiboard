@@ -1,6 +1,9 @@
 <script setup>
 /**
  * SaveWorkflowDialog.vue - 保存工作流对话框
+ * 
+ * 🔧 优化：点击保存后立即关闭对话框，后台异步处理保存请求
+ * 通过 emit('saving') 和 emit('saved')/emit('error') 通知父组件显示状态
  */
 import { ref, computed, watch } from 'vue'
 import { useCanvasStore } from '@/stores/canvas'
@@ -13,7 +16,7 @@ const props = defineProps({
   visible: Boolean
 })
 
-const emit = defineEmits(['close', 'saved'])
+const emit = defineEmits(['close', 'saved', 'saving', 'error'])
 
 const canvasStore = useCanvasStore()
 
@@ -82,7 +85,47 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
-// 保存工作流
+// 计算工作流数据大小（用于预检）
+function calculateDataSize() {
+  const workflowData = canvasStore.exportWorkflow()
+  const nodesJson = JSON.stringify(workflowData.nodes || [])
+  const edgesJson = JSON.stringify(workflowData.edges || [])
+  return Buffer.from(nodesJson + edgesJson, 'utf8').length
+}
+
+// 格式化数据大小为易读格式
+function formatDataSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// 保存到本地备份（用于恢复）
+function saveLocalBackup(workflowData, name) {
+  try {
+    const backupKey = `workflow_backup_${Date.now()}`
+    const backup = {
+      name: name,
+      data: workflowData,
+      savedAt: Date.now()
+    }
+    localStorage.setItem(backupKey, JSON.stringify(backup))
+    
+    // 清理旧的备份（只保留最近3个）
+    const allKeys = Object.keys(localStorage).filter(k => k.startsWith('workflow_backup_'))
+    if (allKeys.length > 3) {
+      allKeys.sort().slice(0, allKeys.length - 3).forEach(k => localStorage.removeItem(k))
+    }
+    
+    console.log('[SaveDialog] 已创建本地备份:', backupKey)
+    return backupKey
+  } catch (e) {
+    console.warn('[SaveDialog] 本地备份失败:', e.message)
+    return null
+  }
+}
+
+// 保存工作流 - 🔧 优化：立即关闭对话框，后台异步处理
 async function handleSave() {
   // 验证
   if (!workflowName.value.trim()) {
@@ -95,23 +138,47 @@ async function handleSave() {
     return
   }
 
-  isSaving.value = true
-  saveError.value = ''
+  // 🔧 预检：检查数据大小（同步检查，快速失败）
+  const dataSize = calculateDataSize()
+  const MAX_SIZE = 50 * 1024 * 1024 // 50MB
+  if (dataSize > MAX_SIZE) {
+    saveError.value = `工作流数据过大 (${formatDataSize(dataSize)})，超过 50MB 限制。请删除一些节点或清理节点中的大图片。`
+    return
+  }
 
+  // 导出工作流数据（在关闭对话框前导出，确保数据完整）
+  const workflowData = canvasStore.exportWorkflow()
+  const nameToSave = workflowName.value.trim()
+  const descToSave = workflowDescription.value.trim()
+  const idToSave = currentWorkflowId.value
+  
+  // 🔧 保存前先创建本地备份（防止保存失败导致数据丢失）
+  const backupKey = saveLocalBackup(workflowData, nameToSave)
+
+  // 添加名称和描述
+  const dataToSave = {
+    id: idToSave,
+    name: nameToSave,
+    description: descToSave,
+    uploadToCloud: true, // 手动保存时上传到云存储
+    ...workflowData
+  }
+
+  // 🔧 立即更新 store 中的工作流元信息（乐观更新）
+  canvasStore.workflowMeta = {
+    id: idToSave || `temp-${Date.now()}`, // 临时 ID
+    name: nameToSave,
+    description: descToSave
+  }
+
+  // 🔧 立即关闭对话框，提升用户体验
+  emit('close')
+  
+  // 🔧 通知父组件：开始保存中
+  emit('saving', { name: nameToSave })
+
+  // 🔧 异步处理保存请求
   try {
-    // 导出工作流数据
-    const workflowData = canvasStore.exportWorkflow()
-
-    // 添加名称和描述
-    const dataToSave = {
-      id: currentWorkflowId.value,
-      name: workflowName.value.trim(),
-      description: workflowDescription.value.trim(),
-      uploadToCloud: true, // 手动保存时上传到云存储
-      ...workflowData
-    }
-
-    // 调用API保存（后端会异步处理文件上传到云存储）
     const result = await saveWorkflow(dataToSave)
 
     // 后端返回格式: { id, success } 或 { workflow: { id, name, ... } }
@@ -121,24 +188,41 @@ async function handleSave() {
       description: dataToSave.description
     }
 
-    // 更新store中的工作流元信息
+    // 更新store中的工作流元信息（使用真实 ID）
     canvasStore.workflowMeta = {
       id: savedWorkflow.id,
       name: savedWorkflow.name,
       description: savedWorkflow.description
     }
+    
+    // 🔧 保存成功，清除本地备份
+    if (backupKey) {
+      try {
+        localStorage.removeItem(backupKey)
+      } catch (e) {
+        // 忽略清除备份失败的错误
+      }
+    }
 
-    // 通知父组件
+    // 通知父组件：保存成功
     emit('saved', savedWorkflow)
-
-    // 关闭对话框
-    emit('close')
 
   } catch (error) {
     console.error('[SaveDialog] 保存失败:', error)
-    saveError.value = error.message || '保存失败'
-  } finally {
-    isSaving.value = false
+    
+    // 🔧 通知父组件：保存失败
+    let errorMessage = error.message || '保存失败，请稍后重试'
+    if (error.message.includes('过大') || error.message.includes('too large') || error.message.includes('413')) {
+      errorMessage = '工作流数据过大，请减少节点或清理大图片后重试'
+    } else if (error.message.includes('database') || error.message.includes('数据库')) {
+      errorMessage = '数据库错误，请稍后重试'
+    }
+    
+    emit('error', { 
+      message: errorMessage,
+      name: nameToSave,
+      backupKey: backupKey // 传递备份 key，便于恢复
+    })
   }
 }
 

@@ -29,6 +29,7 @@ import OnboardingGuide from '@/components/canvas/OnboardingGuide.vue'
 import AIAssistantPanel from '@/components/canvas/AIAssistantPanel.vue'
 import CanvasNotification from '@/components/canvas/CanvasNotification.vue'
 import CanvasSupport from '@/components/canvas/CanvasSupport.vue'
+import CanvasToast from '@/components/canvas/CanvasToast.vue'
 import { useI18n } from '@/i18n'
 import { startAutoSave as startHistoryAutoSave, stopAutoSave as stopHistoryAutoSave, manualSave as saveToHistory } from '@/stores/canvas/workflowAutoSave'
 import { initBackgroundTaskManager, getPendingTasks, subscribeTask, removeCompletedTask } from '@/stores/canvas/backgroundTaskManager'
@@ -83,6 +84,12 @@ const canvasTheme = ref('dark')
 const autoSaveInterval = ref(null)
 const lastAutoSave = ref(null)
 const autoSaveEnabled = ref(false) // 只有保存过的工作流才启用自动保存
+
+// 🔧 Toast 通知状态（用于显示保存状态等）
+const toastMessage = ref('')
+const toastType = ref('info') // success | error | info | warning
+const showToast = ref(false)
+const toastDuration = ref(3000)
 
 // 模式切换
 const isTransitioning = ref(false)
@@ -579,9 +586,37 @@ function closeSaveDialog() {
   showSaveDialog.value = false
 }
 
+// 🔧 显示 Toast 通知
+function displayToast(message, type = 'info', duration = 3000) {
+  toastMessage.value = message
+  toastType.value = type
+  toastDuration.value = duration
+  showToast.value = true
+}
+
+// 🔧 关闭 Toast
+function closeToast() {
+  showToast.value = false
+}
+
+// 🔧 保存中回调（立即显示保存中提示）
+function handleWorkflowSaving(data) {
+  console.log('[Canvas] 工作流保存中:', data.name)
+  displayToast(`正在保存「${data.name}」...`, 'info', 10000) // 10秒超时
+}
+
+// 🔧 保存失败回调
+function handleWorkflowSaveError(data) {
+  console.error('[Canvas] 工作流保存失败:', data.message)
+  displayToast(`保存失败：${data.message}`, 'error', 5000)
+}
+
 // 保存成功回调
 function handleWorkflowSaved(workflow) {
   console.log('[Canvas] 工作流保存成功:', workflow)
+
+  // 🔧 显示保存成功提示
+  displayToast(`工作流「${workflow.name}」保存成功`, 'success', 2000)
 
   // 更新当前标签名称和工作流ID
   canvasStore.updateCurrentTabName(workflow.name)
@@ -620,6 +655,17 @@ async function autoSaveWorkflow() {
     const { saveWorkflow } = await import('@/api/canvas/workflow')
     const workflowData = canvasStore.exportWorkflow()
     
+    // 🔧 预检：计算数据大小，如果过大则跳过自动保存并提示用户手动保存
+    const nodesJson = JSON.stringify(workflowData.nodes || [])
+    const edgesJson = JSON.stringify(workflowData.edges || [])
+    const dataSize = new Blob([nodesJson, edgesJson]).size
+    const MAX_AUTO_SAVE_SIZE = 30 * 1024 * 1024 // 30MB（自动保存限制比手动保存更严格）
+    
+    if (dataSize > MAX_AUTO_SAVE_SIZE) {
+      console.warn(`[Canvas] 自动保存跳过：数据过大 (${(dataSize / 1024 / 1024).toFixed(1)}MB)，请手动保存`)
+      return
+    }
+    
     // 自动保存时，设置 uploadToCloud=false，不上传云存储，只保存到数据库
     await saveWorkflow({
       id: currentTab.workflowId,
@@ -632,7 +678,13 @@ async function autoSaveWorkflow() {
     lastAutoSave.value = new Date()
     console.log('[Canvas] 自动保存成功:', currentTab.name)
   } catch (error) {
-    console.error('[Canvas] 自动保存失败:', error)
+    // 🔧 自动保存失败时，只记录日志不打断用户
+    // 如果是数据过大的错误，提示用户手动保存
+    if (error.message?.includes('过大') || error.message?.includes('too large')) {
+      console.warn('[Canvas] 自动保存失败：数据过大，请手动保存并清理不需要的节点')
+    } else {
+      console.error('[Canvas] 自动保存失败:', error.message || error)
+    }
   }
 }
 
@@ -1565,7 +1617,9 @@ onUnmounted(() => {
       <SaveWorkflowDialog
         :visible="showSaveDialog"
         @close="closeSaveDialog"
+        @saving="handleWorkflowSaving"
         @saved="handleWorkflowSaved"
+        @error="handleWorkflowSaveError"
       />
       
       <!-- 工作流面板 -->
@@ -1669,6 +1723,15 @@ onUnmounted(() => {
       </button>
 
     </div>
+    
+    <!-- 🔧 Toast 通知 -->
+    <CanvasToast
+      v-if="showToast"
+      :message="toastMessage"
+      :type="toastType"
+      :duration="toastDuration"
+      @close="closeToast"
+    />
   </div>
 </template>
 

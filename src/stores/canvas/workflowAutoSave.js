@@ -6,14 +6,141 @@
  * - 缓存有效期为1天，自动清理过期记录
  * - 不存数据库，只做本地临时缓存
  * - 用于用户不小心关闭浏览器时恢复工作流
+ * 
+ * 🔧 安全保护：
+ * - 自动清理节点中的 base64 大数据，避免撑爆 localStorage
+ * - 单个工作流限制 300KB，总存储限制 3MB
+ * - QuotaExceededError 自动处理
  */
 
 const STORAGE_KEY = 'workflow_auto_saves'
 const MAX_HISTORY_COUNT = 20  // 最多保存20条历史记录
 const CACHE_DURATION = 24 * 60 * 60 * 1000  // 1天（毫秒）
 const AUTO_SAVE_INTERVAL = 60 * 1000  // 1分钟（毫秒）
+const MAX_SINGLE_WORKFLOW_SIZE = 300 * 1024  // 单个工作流最大 300KB
+const MAX_TOTAL_STORAGE_SIZE = 3 * 1024 * 1024  // 总存储最大 3MB
 
 let autoSaveTimer = null
+
+/**
+ * 🔧 清理节点中的大数据（base64图片等），只保留结构和URL引用
+ * 这样可以大幅减少存储空间，避免 localStorage 溢出
+ */
+function cleanNodeData(nodes) {
+  if (!Array.isArray(nodes)) return nodes
+  
+  return nodes.map(node => {
+    // 深拷贝节点
+    const cleanedNode = JSON.parse(JSON.stringify(node))
+    
+    if (cleanedNode.data) {
+      // 清理常见的大数据字段（base64图片）
+      const fieldsToClean = ['imageData', 'base64', 'thumbnail', 'previewData', 'originalData']
+      fieldsToClean.forEach(field => {
+        if (cleanedNode.data[field] && typeof cleanedNode.data[field] === 'string') {
+          // 如果是 base64 数据，只保留类型标记
+          if (cleanedNode.data[field].startsWith('data:')) {
+            const mimeMatch = cleanedNode.data[field].match(/^data:([^;,]+)/)
+            cleanedNode.data[field] = mimeMatch ? `[BASE64:${mimeMatch[1]}]` : '[BASE64_REMOVED]'
+          } else if (cleanedNode.data[field].length > 10000) {
+            // 超过 10KB 的字符串数据也清理
+            cleanedNode.data[field] = '[LARGE_DATA_REMOVED]'
+          }
+        }
+      })
+      
+      // 清理 images 数组中的 base64 数据
+      if (Array.isArray(cleanedNode.data.images)) {
+        cleanedNode.data.images = cleanedNode.data.images.map(img => {
+          const cleanedImg = { ...img }
+          // 保留 URL，移除 base64
+          if (cleanedImg.base64) delete cleanedImg.base64
+          if (cleanedImg.data && typeof cleanedImg.data === 'string' && cleanedImg.data.startsWith('data:')) {
+            delete cleanedImg.data
+          }
+          if (cleanedImg.thumbnail && typeof cleanedImg.thumbnail === 'string' && cleanedImg.thumbnail.startsWith('data:')) {
+            delete cleanedImg.thumbnail
+          }
+          return cleanedImg
+        })
+      }
+      
+      // 清理 imageUrl/videoUrl 等字段中的 base64（保留 http URL）
+      const urlFields = ['imageUrl', 'videoUrl', 'url', 'image', 'video', 'audioUrl', 'src']
+      urlFields.forEach(field => {
+        if (cleanedNode.data[field] && typeof cleanedNode.data[field] === 'string') {
+          if (cleanedNode.data[field].startsWith('data:')) {
+            const mimeMatch = cleanedNode.data[field].match(/^data:([^;,]+)/)
+            cleanedNode.data[field] = mimeMatch ? `[BASE64:${mimeMatch[1]}]` : '[BASE64_REMOVED]'
+          }
+        }
+      })
+      
+      // 清理 result/output 等可能包含大数据的字段
+      const resultFields = ['result', 'output', 'response', 'content']
+      resultFields.forEach(field => {
+        if (cleanedNode.data[field] && typeof cleanedNode.data[field] === 'string') {
+          if (cleanedNode.data[field].startsWith('data:')) {
+            cleanedNode.data[field] = '[BASE64_REMOVED]'
+          } else if (cleanedNode.data[field].length > 50000) {
+            // 超过 50KB 的文本内容截断
+            cleanedNode.data[field] = cleanedNode.data[field].substring(0, 1000) + '...[TRUNCATED]'
+          }
+        }
+      })
+    }
+    
+    return cleanedNode
+  })
+}
+
+/**
+ * 🔧 安全地保存到 localStorage，处理容量溢出
+ */
+function saveToLocalStorage(history) {
+  try {
+    const jsonData = JSON.stringify(history)
+    
+    // 检查总大小
+    if (jsonData.length > MAX_TOTAL_STORAGE_SIZE) {
+      console.warn(`[WorkflowAutoSave] 数据过大 (${(jsonData.length / 1024 / 1024).toFixed(2)}MB)，清理旧记录`)
+      // 逐步删除旧记录直到大小合适
+      while (history.length > 1) {
+        history.pop()
+        const newJson = JSON.stringify(history)
+        if (newJson.length <= MAX_TOTAL_STORAGE_SIZE) {
+          break
+        }
+      }
+    }
+    
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(history))
+    return true
+  } catch (e) {
+    // 处理 QuotaExceededError
+    if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) {
+      console.warn('[WorkflowAutoSave] localStorage 空间不足，清理旧记录')
+      
+      // 删除一半记录后重试
+      const reducedHistory = history.slice(0, Math.max(1, Math.floor(history.length / 2)))
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(reducedHistory))
+        console.log('[WorkflowAutoSave] 清理后保存成功，剩余记录数:', reducedHistory.length)
+        return true
+      } catch (e2) {
+        console.error('[WorkflowAutoSave] 清理后仍无法保存，清空所有历史')
+        try {
+          localStorage.removeItem(STORAGE_KEY)
+        } catch (e3) {
+          // 忽略
+        }
+        return false
+      }
+    }
+    console.error('[WorkflowAutoSave] 保存失败:', e)
+    return false
+  }
+}
 
 /**
  * 获取所有历史工作流
@@ -34,7 +161,7 @@ export function getWorkflowHistory() {
     
     // 如果有过期记录被清理，更新存储
     if (validHistory.length !== history.length) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(validHistory))
+      saveToLocalStorage(validHistory)
     }
     
     // 按时间倒序排列（最新的在前）
@@ -55,23 +182,38 @@ export function saveWorkflowToHistory(workflow) {
   }
   
   try {
+    // 🔧 清理节点中的大数据（base64图片等）
+    const cleanedNodes = cleanNodeData(workflow.nodes)
+    const cleanedEdges = JSON.parse(JSON.stringify(workflow.edges || []))
+    
+    // 🔧 检查清理后的数据大小
+    const testData = JSON.stringify({ nodes: cleanedNodes, edges: cleanedEdges })
+    const dataSize = testData.length
+    
+    if (dataSize > MAX_SINGLE_WORKFLOW_SIZE) {
+      console.warn(`[WorkflowAutoSave] 工作流数据过大 (${(dataSize / 1024).toFixed(1)}KB > ${MAX_SINGLE_WORKFLOW_SIZE / 1024}KB)，跳过历史保存`)
+      console.warn(`[WorkflowAutoSave] 提示：请手动保存工作流到服务器，历史记录只用于临时恢复`)
+      return false
+    }
+    
     let history = getWorkflowHistory()
     
     // 生成唯一ID
     const historyId = `history-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
     
-    // 创建历史记录
+    // 创建历史记录（使用清理后的数据）
     const historyItem = {
       id: historyId,
       name: workflow.name || '未命名工作流',
       tabId: workflow.tabId || null,
       workflowId: workflow.workflowId || null,  // 原始工作流ID（如果是已保存的工作流）
       nodeCount: workflow.nodes.length,
-      edgeCount: workflow.edges?.length || 0,
-      nodes: JSON.parse(JSON.stringify(workflow.nodes)),
-      edges: JSON.parse(JSON.stringify(workflow.edges || [])),
+      edgeCount: cleanedEdges.length,
+      nodes: cleanedNodes,  // 使用清理后的节点
+      edges: cleanedEdges,
       viewport: workflow.viewport ? { ...workflow.viewport } : { x: 0, y: 0, zoom: 1 },
-      savedAt: Date.now()
+      savedAt: Date.now(),
+      dataSize: dataSize  // 记录数据大小，便于调试
     }
     
     // 检查是否有相同 tabId 的最近记录，避免重复保存相同内容
@@ -84,7 +226,7 @@ export function saveWorkflowToHistory(workflow) {
       if (recentSameTab) {
         // 检查内容是否有变化
         const oldHash = generateSimpleHash(recentSameTab.nodes)
-        const newHash = generateSimpleHash(workflow.nodes)
+        const newHash = generateSimpleHash(cleanedNodes)
         
         if (oldHash === newHash) {
           console.log('[WorkflowAutoSave] 内容无变化，跳过保存')
@@ -96,11 +238,9 @@ export function saveWorkflowToHistory(workflow) {
     // 关键优化：如果是已保存的工作流（有workflowId），移除同一workflowId的旧记录
     if (workflow.workflowId) {
       history = history.filter(h => h.workflowId !== workflow.workflowId)
-      console.log(`[WorkflowAutoSave] 已移除同一工作流的旧历史记录: ${workflow.name}`)
     } else if (workflow.tabId) {
       // 如果是未保存的工作流，移除同一tabId的旧记录（保留最新的）
       history = history.filter(h => h.tabId !== workflow.tabId)
-      console.log(`[WorkflowAutoSave] 已移除同一标签的旧历史记录: ${workflow.name}`)
     }
     
     // 添加到历史记录开头
@@ -111,11 +251,12 @@ export function saveWorkflowToHistory(workflow) {
       history.pop()
     }
     
-    // 保存到 localStorage
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history))
-    
-    console.log('[WorkflowAutoSave] 已保存工作流:', historyItem.name, '节点数:', historyItem.nodeCount)
-    return true
+    // 🔧 安全保存到 localStorage
+    if (saveToLocalStorage(history)) {
+      console.log(`[WorkflowAutoSave] 已保存工作流: ${historyItem.name} | 节点数: ${historyItem.nodeCount} | 大小: ${(dataSize / 1024).toFixed(1)}KB`)
+      return true
+    }
+    return false
   } catch (error) {
     console.error('[WorkflowAutoSave] 保存失败:', error)
     return false
@@ -140,7 +281,7 @@ export function deleteWorkflowHistory(historyId) {
   try {
     const history = getWorkflowHistory()
     const newHistory = history.filter(h => h.id !== historyId)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newHistory))
+    saveToLocalStorage(newHistory)
     console.log('[WorkflowAutoSave] 已删除历史记录:', historyId)
     return true
   } catch (error) {
@@ -242,3 +383,24 @@ export function getHistoryCount() {
   return getWorkflowHistory().length
 }
 
+/**
+ * 🔧 获取当前存储使用情况（用于调试）
+ */
+export function getStorageStats() {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY)
+    const size = data ? data.length : 0
+    const history = data ? JSON.parse(data) : []
+    
+    return {
+      count: history.length,
+      totalSize: size,
+      totalSizeKB: (size / 1024).toFixed(2),
+      maxSize: MAX_TOTAL_STORAGE_SIZE,
+      maxSizeKB: (MAX_TOTAL_STORAGE_SIZE / 1024).toFixed(0),
+      usagePercent: ((size / MAX_TOTAL_STORAGE_SIZE) * 100).toFixed(1)
+    }
+  } catch (e) {
+    return { error: e.message }
+  }
+}
