@@ -19,6 +19,7 @@ import { getImagePresets, incrementPresetUseCount, createImagePreset, updateImag
 import ImagePresetDialog from '../dialogs/ImagePresetDialog.vue'
 import ImagePresetManager from '../dialogs/ImagePresetManager.vue'
 import ImageCropper from '../ImageCropper.vue'
+import Camera3DPanel from '../Camera3DPanel.vue'
 import { removeBackground } from '@imgly/background-removal'
 
 const { t } = useI18n()
@@ -690,6 +691,16 @@ const showCutoutOptions = ref(false)
 const cutoutBgColor = ref('transparent') // 'transparent' | 'white' | 'green' | 'custom'
 const cutoutCustomColor = ref('#0066ff')
 
+// 3D 相机角度控制状态
+const show3DCamera = ref(false)
+const cameraAngles = ref({
+  horizontal: props.data?.cameraAngle?.horizontal || 0,
+  vertical: props.data?.cameraAngle?.vertical || 0,
+  zoom: props.data?.cameraAngle?.zoom || 5,
+  prompt: props.data?.cameraPrompt || ''
+})
+const multianglePointsCost = ref(0) // 多角度生成积分消耗
+
 // 预设背景颜色
 const cutoutBgPresets = [
   { id: 'transparent', label: '透明', color: null, icon: '🔲' },
@@ -1180,6 +1191,227 @@ async function handleToolbarGrid4Crop() {
   } finally {
     isGrid4Cropping.value = false
   }
+}
+
+// ========== 3D 相机角度控制 ==========
+// 获取多角度积分配置
+async function fetchMultiangleConfig() {
+  try {
+    const token = localStorage.getItem('token')
+    const response = await fetch('/api/settings/app', {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        ...getTenantHeaders()
+      }
+    })
+    if (response.ok) {
+      const data = await response.json()
+      console.log('[ImageNode] 获取到设置:', data)
+      const config = data.image_multiangle_config || {}
+      multianglePointsCost.value = config.points_cost || 0
+      console.log('[ImageNode] 多角度积分消耗:', multianglePointsCost.value)
+    } else {
+      console.warn('[ImageNode] 获取设置失败:', response.status)
+    }
+  } catch (e) {
+    console.warn('[ImageNode] 获取多角度配置失败:', e)
+  }
+}
+
+// 打开/关闭3D相机面板
+function handleToolbar3DCamera() {
+  console.log('[ImageNode] 工具栏：角度切换', props.id)
+  // 打开面板时获取积分配置
+  if (!show3DCamera.value) {
+    fetchMultiangleConfig()
+  }
+  show3DCamera.value = !show3DCamera.value
+}
+
+// 相机角度更新回调
+function handleCameraUpdate(data) {
+  cameraAngles.value = data
+  console.log('[ImageNode] 相机角度更新:', data)
+}
+
+// 应用相机角度
+function handleCameraApply(data) {
+  cameraAngles.value = data
+  // 将提示词保存到节点数据中
+  canvasStore.updateNodeData(props.id, {
+    cameraAngle: {
+      horizontal: data.horizontal,
+      vertical: data.vertical,
+      zoom: data.zoom
+    },
+    cameraPrompt: data.prompt
+  })
+  show3DCamera.value = false
+  console.log('[ImageNode] 应用相机角度:', data.prompt)
+}
+
+// 多角度生成开始处理（任务提交后立即调用）
+async function handleMultiangleGenerateStart(data) {
+  console.log('[ImageNode] 多角度生成任务已提交:', data)
+  
+  // 获取当前节点信息
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 创建新的图像节点，显示生成中状态
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const newNodePosition = {
+    x: currentNode.position.x + (nodeWidth.value || 300) + 100,
+    y: currentNode.position.y
+  }
+  
+  canvasStore.addNode({
+    id: newNodeId,
+    type: 'image',
+    position: newNodePosition,
+    data: {
+      label: '多角度生成中...',
+      title: '多角度生成',
+      status: 'processing',
+      cameraAngle: data.angles,
+      cameraPrompt: data.prompt,
+      sourceType: 'multiangle',
+      multiangleTaskId: data.taskId
+    }
+  })
+  
+  // 连接节点
+  canvasStore.addEdge({
+    id: `edge_${props.id}_${newNodeId}`,
+    source: props.id,
+    target: newNodeId,
+    sourceHandle: 'output',
+    targetHandle: 'input',
+    type: 'smoothstep'
+  })
+  
+  show3DCamera.value = false
+  
+  // 后台轮询任务状态
+  pollMultiangleTask(data.taskId, newNodeId)
+}
+
+// 轮询多角度任务状态
+async function pollMultiangleTask(taskId, nodeId) {
+  const token = localStorage.getItem('token')
+  if (!token) return
+  
+  const pollInterval = 2000
+  const maxPolls = 150 // 最多轮询5分钟
+  let pollCount = 0
+  
+  while (pollCount < maxPolls) {
+    await new Promise(resolve => setTimeout(resolve, pollInterval))
+    pollCount++
+    
+    try {
+      const response = await fetch(`/api/images/multiangle/task/${taskId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          ...getTenantHeaders()
+        }
+      })
+      
+      if (!response.ok) continue
+      
+      const statusData = await response.json()
+      
+      if (statusData.status === 'completed') {
+        // 更新节点为完成状态
+        canvasStore.updateNodeData(nodeId, {
+          label: 'Multiangle',
+          status: 'completed',
+          output: {
+            url: statusData.outputUrl || statusData.url,
+            urls: [statusData.outputUrl || statusData.url]
+          }
+        })
+        console.log('[ImageNode] 多角度生成完成:', statusData.outputUrl)
+        return
+        
+      } else if (statusData.status === 'failed' || statusData.status === 'timeout') {
+        // 更新节点为失败状态
+        canvasStore.updateNodeData(nodeId, {
+          label: '生成失败',
+          status: 'error',
+          error: statusData.error || '生成失败'
+        })
+        console.error('[ImageNode] 多角度生成失败:', statusData.error)
+        return
+      }
+      
+    } catch (error) {
+      console.warn('[ImageNode] 轮询任务状态失败:', error)
+    }
+  }
+  
+  // 超时处理
+  canvasStore.updateNodeData(nodeId, {
+    label: '生成超时',
+    status: 'error',
+    error: '生成超时，请重试'
+  })
+}
+
+// 多角度生成成功处理（保留兼容旧逻辑）
+function handleMultiangleGenerateSuccess(data) {
+  console.log('[ImageNode] 多角度生成成功:', data)
+  
+  // 获取当前节点信息
+  const currentNode = canvasStore.nodes.find(n => n.id === props.id)
+  if (!currentNode) return
+  
+  // 创建新的图像节点显示生成结果
+  const newNodeId = `node_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const newNodePosition = {
+    x: currentNode.position.x + (nodeWidth.value || 300) + 100,
+    y: currentNode.position.y
+  }
+  
+  canvasStore.addNode({
+    id: newNodeId,
+    type: 'image',
+    position: newNodePosition,
+    data: {
+      label: 'Multiangle',
+      title: 'Multiangle',
+      output: {
+        url: data.outputUrl,
+        urls: [data.outputUrl]
+      },
+      cameraAngle: data.angles,
+      cameraPrompt: data.prompt,
+      sourceType: 'multiangle'
+    }
+  })
+  
+  // 连接节点
+  canvasStore.addEdge({
+    id: `edge_${props.id}_${newNodeId}`,
+    source: props.id,
+    target: newNodeId,
+    sourceHandle: 'output',
+    targetHandle: 'input',
+    type: 'smoothstep'
+  })
+  
+  show3DCamera.value = false
+}
+
+// 多角度生成失败处理
+function handleMultiangleGenerateError(data) {
+  console.error('[ImageNode] 多角度生成失败:', data.error)
+  // 错误已在 Camera3DPanel 中显示
+}
+
+// 关闭相机面板
+function handleCameraClose() {
+  show3DCamera.value = false
 }
 
 function handleToolbarAnnotate() {
@@ -3780,6 +4012,18 @@ async function handleDrop(event) {
         </svg>
         <span>4宫格裁剪</span>
       </button>
+      <button class="toolbar-btn" :class="{ active: show3DCamera }" title="3D相机角度" @mousedown.prevent="handleToolbar3DCamera">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <!-- 相机机身 -->
+          <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" stroke-linecap="round" stroke-linejoin="round"/>
+          <!-- 镜头 -->
+          <circle cx="12" cy="13" r="4"/>
+          <!-- 角度指示 -->
+          <path d="M12 9V6" stroke-linecap="round" opacity="0.6"/>
+          <path d="M16 13h3" stroke-linecap="round" opacity="0.6"/>
+        </svg>
+        <span>角度</span>
+      </button>
       <div class="toolbar-divider"></div>
       <button class="toolbar-btn icon-only" title="标注" @mousedown.prevent="handleToolbarAnnotate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -3803,6 +4047,24 @@ async function handleDrop(event) {
         </svg>
       </button>
     </div>
+    
+    <!-- 3D 相机角度控制面板 -->
+    <Teleport to="body">
+      <Transition name="camera-panel">
+        <Camera3DPanel
+          v-if="show3DCamera"
+          :image-url="currentImageUrl"
+          :initial-angles="cameraAngles"
+          :points-cost="multianglePointsCost"
+          @update="handleCameraUpdate"
+          @apply="handleCameraApply"
+          @close="handleCameraClose"
+          @generate-start="handleMultiangleGenerateStart"
+          @generate-success="handleMultiangleGenerateSuccess"
+          @generate-error="handleMultiangleGenerateError"
+        />
+      </Transition>
+    </Teleport>
     
     <!-- 节点标签 -->
     <div 
@@ -4373,10 +4635,28 @@ async function handleDrop(event) {
   color: #fff;
 }
 
+.image-toolbar .toolbar-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
 .image-toolbar .toolbar-btn.is-processing {
   background: rgba(59, 130, 246, 0.2);
   color: #60a5fa;
   cursor: wait;
+}
+
+/* 3D相机面板动画 */
+.camera-panel-enter-active,
+.camera-panel-leave-active {
+  transition: all 0.25s ease;
+}
+
+.camera-panel-enter-from,
+.camera-panel-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
 }
 
 .image-toolbar .toolbar-btn.is-processing:hover {
@@ -4649,6 +4929,13 @@ async function handleDrop(event) {
 .image-node.selected .node-card {
   border-color: var(--canvas-accent-primary, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* 源节点和单图输出选中时 - 边框显示在图片上，不显示在 node-card 上 */
+.image-node.is-source-node.selected .node-card,
+.image-node.has-single-output.selected .node-card {
+  border-color: transparent !important;
+  box-shadow: none !important;
 }
 
 /* ========== 彗星环绕发光特效（生成中） ========== */

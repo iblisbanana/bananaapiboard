@@ -148,9 +148,9 @@ async function handleSave() {
 
   // 🔧 预检：检查数据大小（同步检查，快速失败）
   const dataSize = calculateDataSize()
-  const MAX_SIZE = 50 * 1024 * 1024 // 50MB
+  const MAX_SIZE = 80 * 1024 * 1024 // 80MB
   if (dataSize > MAX_SIZE) {
-    saveError.value = `工作流数据过大 (${formatDataSize(dataSize)})，超过 50MB 限制。请删除一些节点或清理节点中的大图片。`
+    saveError.value = `工作流数据过大 (${formatDataSize(dataSize)})，超过 80MB 限制。请删除一些节点或清理节点中的大图片。`
     return
   }
 
