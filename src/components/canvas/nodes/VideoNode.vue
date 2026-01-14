@@ -178,10 +178,10 @@ const selectedModelLabel = computed(() => {
 })
 
 // VEO3模型列表（不支持时长参数）
-const VEO3_MODELS = ['veo3.1-components', 'veo3.1', 'veo3.1-pro']
+const VEO3_MODELS = ['veo3', 'veo3.1-fast', 'veo3.1-components', 'veo3.1', 'veo3.1-pro']
 
-// 当前模型是否为VEO3系列
-const isVeo3Model = computed(() => VEO3_MODELS.includes(selectedModel.value))
+// 当前模型是否为VEO3系列（包括整合入口和所有子模型）
+const isVeo3Model = computed(() => VEO3_MODELS.includes(selectedModel.value) || isVeoModel.value)
 
 // Sora2模型列表（支持高级选项：trim、style、storyboard）
 const SORA2_MODELS = ['sora2', 'sora2-pro', 'sora-2', 'sora-2-pro']
@@ -269,6 +269,66 @@ const currentViduModeConfig = computed(() => {
 const viduMaxImages = computed(() => {
   if (!isViduModel.value) return 9
   return currentViduModeConfig.value.maxImages
+})
+
+// ==================== VEO 模型相关 ====================
+// 当前模型是否为 VEO 系列
+const isVeoModel = computed(() => {
+  return currentModelConfig.value?.isVeoModel === true
+})
+
+// VEO 图生视频模式选择
+const veoMode = ref(props.data.veoMode || 'standard')  // fast, standard, components, pro
+
+// VEO 清晰度选择
+const veoResolution = ref(props.data.veoResolution || '1080p')
+
+// VEO 模式选项（从模型配置获取）
+const VEO_MODE_OPTIONS = computed(() => {
+  return currentModelConfig.value?.veoModes || [
+    { value: 'fast', label: 'fast首尾帧', description: '快速生成', actualModel: 'veo3.1-fast', maxImages: 2, pointsCost: 80 },
+    { value: 'standard', label: '首尾帧', description: '标准质量', actualModel: 'veo3.1', maxImages: 2, pointsCost: 100 },
+    { value: 'components', label: '多图参考', description: '最多3张图', actualModel: 'veo3.1-components', maxImages: 3, pointsCost: 120 },
+    { value: 'pro', label: 'Pro首尾帧', description: '最高画质', actualModel: 'veo3.1-pro', maxImages: 2, pointsCost: 150 }
+  ]
+})
+
+// VEO 清晰度选项（从模型配置获取）
+const VEO_RESOLUTION_OPTIONS = computed(() => {
+  return currentModelConfig.value?.veoResolutions || [
+    { value: '1080p', label: '1080P', extraCost: 0 },
+    { value: '4k', label: '4K', extraCost: 1 }
+  ]
+})
+
+// 当前 VEO 模式配置
+const currentVeoModeConfig = computed(() => {
+  return VEO_MODE_OPTIONS.value.find(m => m.value === veoMode.value) || VEO_MODE_OPTIONS.value[0]
+})
+
+// 🔧 当前模式支持的清晰度选项（fast 模式不支持 4K）
+const availableVeoResolutions = computed(() => {
+  if (!isVeoModel.value) return []
+  const allResolutions = VEO_RESOLUTION_OPTIONS.value
+  const currentMode = currentVeoModeConfig.value
+  
+  // 如果当前模式有 supportedResolutions 限制，过滤
+  if (currentMode.supportedResolutions && Array.isArray(currentMode.supportedResolutions)) {
+    return allResolutions.filter(r => currentMode.supportedResolutions.includes(r.value))
+  }
+  return allResolutions
+})
+
+// VEO 模式下的最大图片数量
+const veoMaxImages = computed(() => {
+  if (!isVeoModel.value) return 9
+  return currentVeoModeConfig.value.maxImages
+})
+
+// 获取 VEO 实际要使用的模型名称
+const veoActualModel = computed(() => {
+  if (!isVeoModel.value) return selectedModel.value
+  return currentVeoModeConfig.value.actualModel || selectedModel.value
 })
 
 // 获取当前选中的模型对象
@@ -778,8 +838,20 @@ const hasUpstreamText = computed(() => {
 
 // 积分消耗计算（从模型配置中读取）
 const pointsCost = computed(() => {
-  const modelPointsCost = currentModelConfig.value.pointsCost
   let cost = 1
+  
+  // VEO 模型：使用当前模式的积分配置
+  if (isVeoModel.value) {
+    cost = currentVeoModeConfig.value.pointsCost || 100
+    // VEO 4K 清晰度额外费用
+    const currentRes = VEO_RESOLUTION_OPTIONS.value.find(r => r.value === veoResolution.value)
+    if (currentRes && currentRes.extraCost > 0) {
+      cost += currentRes.extraCost
+    }
+    return cost
+  }
+  
+  const modelPointsCost = currentModelConfig.value.pointsCost
   
   // 如果是按时长计费的模型
   if (currentModelConfig.value.hasDurationPricing && typeof modelPointsCost === 'object') {
@@ -984,8 +1056,8 @@ function handleKeyframesToVideo() {
 }
 
 // 监听参数变化，保存到store
-watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, promptText, generationMode, viduOffPeak, viduResolution], 
-  ([model, aspectRatio, duration, count, prompt, mode, offPeak, resolution]) => {
+watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, promptText, generationMode, viduOffPeak, viduResolution, veoMode, veoResolution], 
+  ([model, aspectRatio, duration, count, prompt, mode, offPeak, resolution, veoMd, veoRes]) => {
     canvasStore.updateNodeData(props.id, {
       model,
       aspectRatio,
@@ -994,10 +1066,22 @@ watch([selectedModel, selectedAspectRatio, selectedDuration, selectedCount, prom
       prompt,
       generationMode: mode,
       viduOffPeak: offPeak,
-      viduResolution: resolution
+      viduResolution: resolution,
+      veoMode: veoMd,
+      veoResolution: veoRes
     })
   }
 )
+
+// 🔧 监听 VEO 模式切换，如果当前清晰度不被支持，自动切换到 1080p
+watch(veoMode, () => {
+  if (!isVeoModel.value) return
+  const currentMode = VEO_MODE_OPTIONS.value.find(m => m.value === veoMode.value)
+  if (currentMode?.supportedResolutions && !currentMode.supportedResolutions.includes(veoResolution.value)) {
+    veoResolution.value = '1080p'
+    console.log('[VideoNode] VEO 模式切换，清晰度重置为 1080p')
+  }
+})
 
 // 监听 promptText 变化，自动调整文本框高度
 watch(promptText, () => {
@@ -1178,7 +1262,16 @@ async function sendGenerateRequest(finalPrompt, finalImages) {
   // 构建请求数据
   const formData = new FormData()
   formData.append('prompt', finalPrompt || '根据图片生成视频')
-  formData.append('model', selectedModel.value)
+  
+  // VEO 模型：使用实际的模型名称
+  if (isVeoModel.value) {
+    formData.append('model', veoActualModel.value)
+    formData.append('veo_resolution', veoResolution.value)
+    console.log('[VideoNode] VEO 实际模型:', veoActualModel.value, '清晰度:', veoResolution.value)
+  } else {
+    formData.append('model', selectedModel.value)
+  }
+  
   formData.append('aspect_ratio', selectedAspectRatio.value)
   
   // VEO3 模型不需要时长参数
@@ -3845,6 +3938,56 @@ function handleToolbarPreview() {
           </div>
         </div>
       </template>
+      
+      <!-- VEO 模型模式选择 -->
+      <template v-if="isVeoModel">
+        <div class="veo-mode-section">
+          <div class="veo-mode-header">
+            <span class="veo-mode-label">🎬 VEO 模式</span>
+            <span class="veo-mode-hint">当前: {{ currentVeoModeConfig.label }}</span>
+          </div>
+          <div class="veo-mode-options">
+            <button
+              v-for="opt in VEO_MODE_OPTIONS"
+              :key="opt.value"
+              @click="veoMode = opt.value"
+              :class="['veo-mode-btn', { active: veoMode === opt.value }]"
+            >
+              <span class="veo-mode-btn-label">{{ opt.label }}</span>
+              <span class="veo-mode-btn-desc">{{ opt.maxImages }}张</span>
+            </button>
+          </div>
+          <!-- VEO 清晰度切换（根据模式动态显示可用选项） -->
+          <div class="veo-resolution-section" v-if="availableVeoResolutions.length > 1">
+            <span class="veo-resolution-label">清晰度</span>
+            <div class="veo-resolution-options">
+              <button
+                v-for="res in availableVeoResolutions"
+                :key="res.value"
+                @click="veoResolution = res.value"
+                :class="['veo-resolution-btn', { active: veoResolution === res.value }]"
+              >
+                {{ res.label }}
+                <span v-if="res.extraCost > 0" class="extra-cost">+{{ res.extraCost }}</span>
+              </button>
+            </div>
+          </div>
+          <!-- 模式说明提示 -->
+          <div v-if="veoMode === 'fast'" class="veo-mode-tip blue">
+            ⚡ Fast模式：快速生成，适合预览和测试
+          </div>
+          <div v-else-if="veoMode === 'components'" class="veo-mode-tip purple">
+            💡 多图参考：最多3张图，AI综合参考创作
+          </div>
+          <div v-else-if="veoMode === 'pro'" class="veo-mode-tip gold">
+            🌟 Pro模式：最高画质，适合正式作品
+          </div>
+          <!-- 图片数量验证提示 -->
+          <div v-if="referenceImages.length > 0 && referenceImages.length > currentVeoModeConfig.maxImages" class="veo-mode-tip warning">
+            ⚠️ {{ currentVeoModeConfig.label }}最多支持{{ currentVeoModeConfig.maxImages }}张图
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -6174,5 +6317,235 @@ function handleToolbarPreview() {
   background: rgba(217, 119, 6, 0.08);
   border-color: rgba(217, 119, 6, 0.15);
   color: #d97706;
+}
+
+/* ==================== VEO 模型模式样式 ==================== */
+.veo-mode-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.veo-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.veo-mode-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--canvas-text-primary, #e0e0e0);
+}
+
+.veo-mode-hint {
+  font-size: 11px;
+  color: var(--canvas-text-muted, #888);
+}
+
+.veo-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.veo-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.veo-mode-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.veo-mode-btn.active {
+  border-color: #ffffff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.veo-mode-btn-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--canvas-text-primary, #e0e0e0);
+}
+
+.veo-mode-btn.active .veo-mode-btn-label {
+  color: #ffffff;
+}
+
+.veo-mode-btn-desc {
+  font-size: 10px;
+  color: var(--canvas-text-muted, #888);
+  margin-top: 2px;
+}
+
+/* VEO 清晰度选择 */
+.veo-resolution-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.veo-resolution-label {
+  font-size: 12px;
+  color: var(--canvas-text-secondary, #a0a0a0);
+}
+
+.veo-resolution-options {
+  display: flex;
+  gap: 6px;
+}
+
+.veo-resolution-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  color: var(--canvas-text-secondary, #a0a0a0);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.veo-resolution-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.veo-resolution-btn.active {
+  border-color: #ffffff;
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.veo-resolution-btn .extra-cost {
+  font-size: 10px;
+  color: #a0a0a0;
+  margin-left: 4px;
+}
+
+/* VEO 模式提示 */
+.veo-mode-tip {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.veo-mode-tip.blue {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #a0a0a0;
+}
+
+.veo-mode-tip.purple {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #a0a0a0;
+}
+
+.veo-mode-tip.gold {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #d0d0d0;
+}
+
+.veo-mode-tip.warning {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #a0a0a0;
+}
+
+/* VEO 模式 - 白昼模式 */
+:root.canvas-theme-light .veo-mode-section {
+  border-top-color: rgba(0, 0, 0, 0.1);
+}
+
+:root.canvas-theme-light .veo-mode-label {
+  color: #1c1917;
+}
+
+:root.canvas-theme-light .veo-mode-hint {
+  color: #78716c;
+}
+
+:root.canvas-theme-light .veo-mode-btn {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+:root.canvas-theme-light .veo-mode-btn:hover {
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root.canvas-theme-light .veo-mode-btn.active {
+  border-color: #1a1a1a;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+:root.canvas-theme-light .veo-mode-btn-label {
+  color: #1c1917;
+}
+
+:root.canvas-theme-light .veo-mode-btn.active .veo-mode-btn-label {
+  color: #000000;
+}
+
+:root.canvas-theme-light .veo-mode-btn-desc {
+  color: #78716c;
+}
+
+:root.canvas-theme-light .veo-resolution-btn {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.02);
+  color: #57534e;
+}
+
+:root.canvas-theme-light .veo-resolution-btn:hover {
+  border-color: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root.canvas-theme-light .veo-resolution-btn.active {
+  border-color: #1a1a1a;
+  background: rgba(0, 0, 0, 0.1);
+  color: #000000;
+}
+
+:root.canvas-theme-light .veo-mode-tip.blue {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #525252;
+}
+
+:root.canvas-theme-light .veo-mode-tip.purple {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #525252;
+}
+
+:root.canvas-theme-light .veo-mode-tip.gold {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #404040;
+}
+
+:root.canvas-theme-light .veo-mode-tip.warning {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #525252;
 }
 </style>

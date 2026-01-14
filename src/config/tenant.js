@@ -16,6 +16,32 @@
  * 不再使用 VITE_BRAND_* 环境变量
  */
 
+/**
+ * 从模型名称/标签中提取首字母或首字作为图标
+ * - 英文：取首字母大写
+ * - 中文：取首字
+ * @param {string} label - 模型显示名称
+ * @returns {string} 单个字符用于图标显示
+ */
+function getModelIconChar(label) {
+  if (!label) return '▶'
+  
+  // 去除空格后取第一个字符
+  const firstChar = label.trim()[0]
+  if (!firstChar) return '▶'
+  
+  // 判断是否是中文字符
+  const isChinese = /[\u4e00-\u9fa5]/.test(firstChar)
+  
+  if (isChinese) {
+    // 中文直接返回首字
+    return firstChar
+  } else {
+    // 英文返回大写首字母
+    return firstChar.toUpperCase()
+  }
+}
+
 // 智能检测 API Base URL
 function getDefaultApiBase() {
   // 确保在浏览器环境中运行
@@ -635,13 +661,14 @@ export const getAvailableVideoModels = () => {
   // 获取新格式的模型配置（包含 durations、supportedModes 等完整配置）
   const videoModelsConfig = config.video_models || []
   
-  // 默认模型配置（包含积分配置和描述）- 使用黑白灰图标
+  // 默认模型配置（包含积分配置和描述）- 图标使用首字母/首字，黑白灰风格
   // 新版 Sora2 整合模型：前端只显示 sora2/sora2-pro，后端自动调度渠道
   const defaultModelConfig = {
     // ==================== 新版 Sora2 整合模型 ====================
     'sora2': { 
       label: 'Sora 2', 
-      icon: '◆', 
+      // 图标使用首字母，样式在组件中定义为黑白灰
+      icon: 'S', 
       description: 'OpenAI Sora 视频生成模型，支持文生视频和图生视频', 
       hasDurationPricing: true, 
       pointsCost: { '10': 20, '15': 30 },
@@ -657,7 +684,7 @@ export const getAvailableVideoModels = () => {
     },
     'sora2-pro': { 
       label: 'Sora 2 Pro', 
-      icon: '★', 
+      icon: 'S', 
       description: '专业版 Sora 模型，更高分辨率和细节表现，支持25秒长视频', 
       hasDurationPricing: true, 
       pointsCost: { '10': 300, '15': 450, '25': 750 },
@@ -672,7 +699,7 @@ export const getAvailableVideoModels = () => {
     // ==================== 旧版 Sora 模型（保持兼容）====================
     'sora-2': { 
       label: 'Sora 2 (旧版)', 
-      icon: '◇', 
+      icon: 'S', 
       description: '旧版 Sora 模型，建议使用新版 Sora 2', 
       hasDurationPricing: true, 
       pointsCost: { '10': 20, '15': 30 },
@@ -682,7 +709,7 @@ export const getAvailableVideoModels = () => {
     },
     'sora-2-pro': { 
       label: 'Sora 2 Pro (旧版)', 
-      icon: '☆', 
+      icon: 'S', 
       description: '旧版专业版 Sora 模型', 
       hasDurationPricing: true, 
       pointsCost: { '10': 300, '15': 450, '25': 750 },
@@ -690,14 +717,40 @@ export const getAvailableVideoModels = () => {
       aspectRatios: [{ value: '16:9', label: '横屏 (16:9)' }],
       supportedModes: { t2v: true, i2v: true, a2v: false }
     },
-    // ==================== VEO3 系列 ====================
-    'veo3.1-components': { label: 'VEO 3.1', icon: '▣', description: 'Google DeepMind 最新视频模型，生成速度快，效果逼真', hasDurationPricing: false, pointsCost: 100, supportedModes: { t2v: true, i2v: true, a2v: false } },
-    'veo3.1': { label: 'VEO 3.1 标准', icon: '▢', description: '标准版 VEO 模型，适合日常创作', hasDurationPricing: false, pointsCost: 150, supportedModes: { t2v: true, i2v: true, a2v: false } },
-    'veo3.1-pro': { label: 'VEO 3.1 Pro', icon: '◈', description: '专业版 VEO 模型，支持更复杂的场景和运镜', hasDurationPricing: false, pointsCost: 200, supportedModes: { t2v: true, i2v: true, a2v: false } },
+    // ==================== VEO3 系列（整合入口）====================
+    'veo3': { 
+      label: 'VEO 3.1', 
+      icon: 'V', 
+      description: 'Google DeepMind 视频模型，支持多种生成模式和清晰度', 
+      hasDurationPricing: false, 
+      pointsCost: 100,  // 基础价格，实际按模式计算
+      supportedModes: { t2v: true, i2v: true, a2v: false },
+      // VEO 特有：支持模式选择
+      isVeoModel: true,
+      // VEO 模式选项
+      veoModes: [
+        { value: 'fast', label: 'fast首尾帧', description: '快速生成', actualModel: 'veo3.1-fast', maxImages: 2, pointsCost: 80 },
+        { value: 'standard', label: '首尾帧', description: '标准质量', actualModel: 'veo3.1', maxImages: 2, pointsCost: 100 },
+        { value: 'components', label: '多图参考', description: '最多3张图', actualModel: 'veo3.1-components', maxImages: 3, pointsCost: 120 },
+        { value: 'pro', label: 'Pro首尾帧', description: '最高画质', actualModel: 'veo3.1-pro', maxImages: 2, pointsCost: 150 }
+      ],
+      // VEO 清晰度选项
+      veoResolutions: [
+        { value: '1080p', label: '1080P', extraCost: 0 },
+        { value: '4k', label: '4K', extraCost: 1 }
+      ],
+      defaultVeoMode: 'standard',
+      defaultVeoResolution: '1080p'
+    },
+    // 保留独立模型配置用于后端兼容
+    'veo3.1-fast': { label: 'VEO 3.1 Fast', icon: 'V', description: '快速生成，首尾帧控制', hasDurationPricing: false, pointsCost: 80, supportedModes: { t2v: true, i2v: true, a2v: false }, hidden: true },
+    'veo3.1-components': { label: 'VEO 3.1 多图', icon: 'V', description: '多图参考生成', hasDurationPricing: false, pointsCost: 120, supportedModes: { t2v: true, i2v: true, a2v: false }, hidden: true },
+    'veo3.1': { label: 'VEO 3.1 标准', icon: 'V', description: '标准版首尾帧', hasDurationPricing: false, pointsCost: 100, supportedModes: { t2v: true, i2v: true, a2v: false }, hidden: true },
+    'veo3.1-pro': { label: 'VEO 3.1 Pro', icon: 'V', description: 'Pro版首尾帧', hasDurationPricing: false, pointsCost: 150, supportedModes: { t2v: true, i2v: true, a2v: false }, hidden: true },
     // ==================== Kling（可灵）图生视频模型 ====================
     'kling-v2-6-pro': { 
       label: 'Kling 2.6 Pro (首尾帧)', 
-      icon: '✨', 
+      icon: 'K', 
       description: '可灵 v2.6 专业版，支持首帧和尾帧控制', 
       hasDurationPricing: true, 
       pointsCost: { '5': 24, '10': 48 }, 
@@ -707,23 +760,184 @@ export const getAvailableVideoModels = () => {
     }
   }
   
-  // 转换为数组格式的默认模型列表
-  const defaultModels = Object.entries(defaultModelConfig).map(([key, config]) => ({
-    value: key,
-    ...config
-  }))
+  // 转换为数组格式的默认模型列表（过滤掉 hidden 为 true 的模型）
+  const defaultModels = Object.entries(defaultModelConfig)
+    .filter(([key, config]) => !config.hidden)
+    .map(([key, config]) => ({
+      value: key,
+      ...config
+    }))
   
   // 优先使用 video_models 数组的顺序（保持后端配置的排序）
   // 如果有新格式配置数组，按照数组顺序构建模型列表
   if (videoModelsConfig && Array.isArray(videoModelsConfig) && videoModelsConfig.length > 0) {
     const models = []
     
+    // 🔧 VEO 模型整合逻辑：收集所有 VEO 子模型，用于生成模式选项
+    const veoSubModels = []
+    
     for (const modelConfig of videoModelsConfig) {
+      const key = modelConfig.name
+      if (!key) continue
+      if (modelConfig.enabled === false || enabledModels[key] === false) continue
+      
+      // 检测 VEO 模型（通过 apiType 或模型名称）
+      const isVeoSubModel = modelConfig.apiType === 'vectorengine' || 
+                           key.toLowerCase().includes('veo3') ||
+                           (modelConfig.displayName || '').toLowerCase().includes('veo')
+      
+      if (isVeoSubModel) {
+        veoSubModels.push(modelConfig)
+      }
+    }
+    
+    // VEO 模型处理：如果租户后台配置了子模型则整合，否则使用默认配置
+    // 默认 VEO 模式配置（当租户后台未配置时使用）
+    // supportedResolutions: fast 模式只支持 1080p，其他模式支持 1080p 和 4k
+    const defaultVeoModes = [
+      { value: 'fast', label: 'fast首尾帧', description: '快速生成', actualModel: 'veo3.1-fast', maxImages: 2, pointsCost: 80, supportedResolutions: ['1080p'] },
+      { value: 'standard', label: '首尾帧', description: '标准质量', actualModel: 'veo3.1', maxImages: 2, pointsCost: 100, supportedResolutions: ['1080p', '4k'] },
+      { value: 'components', label: '多图参考', description: '最多3张图', actualModel: 'veo3.1-components', maxImages: 3, pointsCost: 120, supportedResolutions: ['1080p', '4k'] },
+      { value: 'pro', label: 'Pro首尾帧', description: '最高画质', actualModel: 'veo3.1-pro', maxImages: 2, pointsCost: 150, supportedResolutions: ['1080p', '4k'] }
+    ]
+    
+    let finalVeoModes = defaultVeoModes
+    let veoPointsCost = 100
+    let veoAspectRatios = [{ value: '16:9', label: '横屏 (16:9)' }]
+    let veo4kExtraCost = 1  // 默认 4K 额外积分
+    
+    // 🔧 记录第一个 VEO 子模型在原始配置中的位置，用于排序
+    let veoInsertIndex = -1
+    for (let i = 0; i < videoModelsConfig.length; i++) {
+      const m = videoModelsConfig[i]
+      if (m.enabled === false) continue
+      const isVeo = m.apiType === 'vectorengine' || 
+                   (m.name || '').toLowerCase().includes('veo3') ||
+                   (m.displayName || '').toLowerCase().includes('veo')
+      if (isVeo) {
+        veoInsertIndex = i
+        break
+      }
+    }
+    
+    // 如果有 VEO 子模型配置，使用配置的模型覆盖默认
+    if (veoSubModels.length > 0) {
+      // 从第一个子模型读取 4K 额外积分配置（如果有）
+      const firstVeoConfig = veoSubModels[0]
+      if (firstVeoConfig.veo4kExtraCost !== undefined) {
+        veo4kExtraCost = Number(firstVeoConfig.veo4kExtraCost) || 1
+      }
+      
+      // 动态生成 VEO 模式选项
+      const veoModes = veoSubModels.map(m => {
+        const name = m.name || ''
+        const displayName = m.displayName || m.name || ''
+        const pointsCost = typeof m.pointsCost === 'number' ? m.pointsCost : 100
+        
+        // 根据名称推断模式类型和支持的清晰度
+        let modeValue = 'standard'
+        let modeLabel = displayName
+        let maxImages = 2
+        let supportedResolutions = ['1080p', '4k']  // 默认支持两种清晰度
+        
+        if (name.includes('fast') || displayName.includes('fast')) {
+          modeValue = 'fast'
+          modeLabel = 'fast首尾帧'
+          supportedResolutions = ['1080p']  // fast 模式只支持 1080p
+        } else if (name.includes('components') || displayName.includes('多图') || displayName.includes('参考')) {
+          modeValue = 'components'
+          modeLabel = '多图参考'
+          maxImages = 3
+        } else if (name.includes('pro') || displayName.includes('pro') || displayName.includes('Pro')) {
+          modeValue = 'pro'
+          modeLabel = 'Pro首尾帧'
+        } else {
+          modeValue = 'standard'
+          modeLabel = '首尾帧'
+        }
+        
+        return {
+          value: modeValue,
+          label: modeLabel,
+          description: m.description || '',
+          actualModel: name,
+          maxImages,
+          pointsCost,
+          supportedResolutions
+        }
+      })
+      
+      // 按模式类型排序：fast -> standard -> components -> pro
+      const modeOrder = { fast: 0, standard: 1, components: 2, pro: 3 }
+      veoModes.sort((a, b) => (modeOrder[a.value] ?? 99) - (modeOrder[b.value] ?? 99))
+      
+      // 去重（如果有多个同类型模式，保留第一个）
+      const uniqueVeoModes = []
+      const seenModes = new Set()
+      for (const mode of veoModes) {
+        if (!seenModes.has(mode.value)) {
+          seenModes.add(mode.value)
+          uniqueVeoModes.push(mode)
+        }
+      }
+      
+      finalVeoModes = uniqueVeoModes
+      veoPointsCost = uniqueVeoModes[0]?.pointsCost || 100
+      veoAspectRatios = veoSubModels[0].aspectRatios || veoAspectRatios
+      
+      console.log('[tenant] VEO 模型已整合（从租户配置），子模型数量:', veoSubModels.length, '模式:', uniqueVeoModes.map(m => m.label), '4K额外积分:', veo4kExtraCost)
+    } else {
+      console.log('[tenant] VEO 模型使用默认配置（租户未配置子模型）')
+    }
+    
+    // 构建 VEO 整合入口
+    const veoEntry = {
+      value: 'veo3',
+      label: 'VEO 3.1',
+      icon: 'V',
+      description: 'Google DeepMind 视频模型，支持多种生成模式和清晰度',
+      hasDurationPricing: false,
+      pointsCost: veoPointsCost,
+      durations: [],
+      aspectRatios: veoAspectRatios,
+      supportedModes: { t2v: true, i2v: true, a2v: false },
+      apiType: 'vectorengine',
+      isVeoModel: true,
+      veoModes: finalVeoModes,
+      veoResolutions: [
+        { value: '1080p', label: '1080P', extraCost: 0 },
+        { value: '4k', label: '4K', extraCost: veo4kExtraCost }  // 从配置读取
+      ],
+      defaultVeoMode: finalVeoModes[0]?.value || 'standard',
+      defaultVeoResolution: '1080p'
+    }
+    
+    // 🔧 按原始配置顺序处理所有模型，在 VEO 位置插入整合入口
+    // 遍历原始配置，保持顺序
+    let veoInserted = false
+    
+    for (let i = 0; i < videoModelsConfig.length; i++) {
+      const modelConfig = videoModelsConfig[i]
       const key = modelConfig.name
       if (!key) continue
       
       // 跳过禁用的模型
       if (modelConfig.enabled === false || enabledModels[key] === false) continue
+      
+      // 检测是否是 VEO 子模型
+      const isVeoSubModel = modelConfig.apiType === 'vectorengine' || 
+                           key.toLowerCase().includes('veo3') ||
+                           (modelConfig.displayName || '').toLowerCase().includes('veo')
+      
+      // 🔧 遇到第一个 VEO 子模型时，插入 VEO 整合入口
+      if (isVeoSubModel && !veoInserted) {
+        models.push(veoEntry)
+        veoInserted = true
+        continue  // 跳过 VEO 子模型，不单独显示
+      }
+      
+      // 跳过其他 VEO 子模型
+      if (isVeoSubModel) continue
       
       const modelPricingConfig = pricing[key] || {}
       const defaultConfig = defaultModelConfig[key] || {}
@@ -767,11 +981,18 @@ export const getAvailableVideoModels = () => {
       }
       const supportedModes = modelConfig.supportedModes || defaultConfig.supportedModes || { t2v: true, i2v: true, a2v: false }
       
+      // 计算显示名称
+      const displayLabel = modelConfig.displayName || videoModels[key] || defaultConfig.label || key
+      
+      // 跳过隐藏的模型（如 VEO 子模型）
+      if (defaultConfig.hidden) continue
+      
       models.push({
         value: key,
         // 优先使用租户配置的名称，否则使用默认名称
-        label: modelConfig.displayName || videoModels[key] || defaultConfig.label || key,
-        icon: defaultConfig.icon || (key.includes('veo') ? '🎥' : '✨'),
+        label: displayLabel,
+        // 图标使用首字母/首字（黑白灰风格）
+        icon: defaultConfig.icon || getModelIconChar(displayLabel),
         // 只使用租户配置的描述，为空时不显示
         description: modelConfig.description || descriptions[key] || '',
         // 积分配置
@@ -787,8 +1008,19 @@ export const getAvailableVideoModels = () => {
         // Vidu 720P清晰度折扣（从后端配置读取）
         resolution720Discount: modelConfig.resolution720Discount,
         // API 类型（用于判断是否是 Vidu 模型）
-        apiType: modelConfig.apiType
+        apiType: modelConfig.apiType,
+        // VEO 模型特有属性
+        isVeoModel: defaultConfig.isVeoModel,
+        veoModes: defaultConfig.veoModes,
+        veoResolutions: defaultConfig.veoResolutions,
+        defaultVeoMode: defaultConfig.defaultVeoMode,
+        defaultVeoResolution: defaultConfig.defaultVeoResolution
       })
+    }
+    
+    // 如果没有 VEO 子模型配置，但需要显示默认 VEO，添加到末尾
+    if (!veoInserted) {
+      models.push(veoEntry)
     }
     
     if (models.length > 0) {

@@ -758,21 +758,37 @@ function handleKeyDown(event) {
   border-color: var(--canvas-border-active, #4a4a4a);
 }
 
+/* 黑白灰风格图标 - 实色渐变 */
 .model-icon {
-  width: 20px;
-  height: 20px;
-  background: linear-gradient(135deg, #4285f4, #34a853);
-  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  /* 黑白灰渐变背景 */
+  background: linear-gradient(145deg, #4a4a4a 0%, #2d2d2d 50%, #1a1a1a 100%);
+  border: 1px solid #5a5a5a;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-size: 12px;
-  font-weight: 600;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
+/* LLM 模型使用紫色渐变区分 */
 .model-icon.llm-icon {
-  background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  background: linear-gradient(145deg, #7c3aed 0%, #5b21b6 50%, #4c1d95 100%);
+  border-color: #8b5cf6;
+  color: #f3e8ff;
+  box-shadow: 
+    0 2px 4px rgba(91, 33, 182, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 
 .model-name {
@@ -825,21 +841,38 @@ function handleKeyDown(event) {
   gap: 10px;
 }
 
+/* 下拉列表黑白灰风格图标 - 实色渐变 */
 .model-option-icon {
-  width: 24px;
-  height: 24px;
-  background: linear-gradient(135deg, #4285f4, #34a853);
+  width: 26px;
+  height: 26px;
+  /* 黑白灰渐变背景 */
+  background: linear-gradient(145deg, #4a4a4a 0%, #2d2d2d 50%, #1a1a1a 100%);
+  border: 1px solid #5a5a5a;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: #ffffff;
   font-size: 14px;
+  font-weight: 700;
   flex-shrink: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  box-shadow: 
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.15);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
+/* LLM 模型使用紫色渐变区分 */
 .model-option-icon.llm-icon {
-  background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  background: linear-gradient(145deg, #7c3aed 0%, #5b21b6 50%, #4c1d95 100%);
+  border-color: #8b5cf6;
+  color: #f3e8ff;
+  box-shadow: 
+    0 2px 4px rgba(91, 33, 182, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.15);
 }
 
 .model-option-name {

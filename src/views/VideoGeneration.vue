@@ -331,15 +331,15 @@ function statusColor(status) {
   if (!status) return 'text-slate-500'
   const normalized = status.toString().toLowerCase()
   if (normalized.includes('success') || normalized.includes('completed')) {
-    return 'text-green-500'
+    return 'text-gray-500'
   }
   if (normalized.includes('fail') || normalized.includes('error')) {
     return 'text-red-500'
   }
   if (normalized.includes('process') || normalized.includes('pending') || normalized.includes('progress') || normalized.includes('not_start') || normalized.includes('queued') || normalized.includes('running')) {
-    return 'text-blue-500'
+    return 'text-gray-500'
   }
-  return 'text-amber-500'
+  return 'text-gray-500'
 }
 
 // 辅助函数：判断是否为生成中状态
@@ -1097,7 +1097,7 @@ onUnmounted(() => {
             <button 
               @click="mode = 'image'" 
               :class="mode === 'image' 
-                ? 'bg-white dark:bg-dark-600 shadow-md text-pink-600 dark:text-pink-400' 
+                ? 'bg-white dark:bg-dark-600 shadow-md text-gray-800 dark:text-gray-200' 
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'"
               class="flex-1 flex items-center justify-center space-x-2 rounded-lg transition-all duration-200 font-medium py-3 px-4"
             >
@@ -1107,7 +1107,7 @@ onUnmounted(() => {
             <button 
               @click="mode = 'text'" 
               :class="mode === 'text' 
-                ? 'bg-white dark:bg-dark-600 shadow-md text-primary-600 dark:text-primary-400' 
+                ? 'bg-white dark:bg-dark-600 shadow-md text-gray-800 dark:text-gray-200' 
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'"
               class="flex-1 flex items-center justify-center space-x-2 rounded-lg transition-all duration-200 font-medium py-3 px-4"
             >
@@ -1164,16 +1164,16 @@ onUnmounted(() => {
                 <span>🌙</span>
                 <span>错峰模式</span>
               </label>
-              <div class="flex items-center space-x-3 p-2.5 bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+              <div class="flex items-center space-x-3 p-2.5 bg-gradient-to-r from-gray-100 to-gray-50 dark:from-gray-800/30 dark:to-gray-900/30 border border-gray-300 dark:border-gray-700 rounded-lg">
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input type="checkbox" v-model="offPeak" class="sr-only peer" />
-                  <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-indigo-600"></div>
+                  <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-400 dark:peer-focus:ring-gray-600 rounded-full peer dark:bg-slate-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-gray-600"></div>
                 </label>
                 <div class="flex-1">
-                  <p class="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300">
                     {{ offPeak ? '已开启' : '已关闭' }}
                   </p>
-                  <p class="text-xs text-indigo-600 dark:text-indigo-400 opacity-80">
+                  <p class="text-xs text-gray-600 dark:text-gray-400 opacity-80">
                     {{ offPeak ? '享受错峰优惠，生成时间可能稍长' : '开启后可享受积分折扣' }}
                   </p>
                 </div>
@@ -1193,8 +1193,8 @@ onUnmounted(() => {
                   :class="[
                     'flex-1 py-2 px-3 text-sm font-medium rounded-lg border transition-all',
                     resolution === '720p'
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-emerald-400'
+                      ? 'bg-white text-black border-white dark:bg-gray-200 dark:text-black dark:border-gray-200'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-gray-400'
                   ]"
                 >
                   720P
@@ -1208,8 +1208,8 @@ onUnmounted(() => {
                   :class="[
                     'flex-1 py-2 px-3 text-sm font-medium rounded-lg border transition-all',
                     resolution === '1080p'
-                      ? 'bg-emerald-600 text-white border-emerald-600'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-emerald-400'
+                      ? 'bg-white text-black border-white dark:bg-gray-200 dark:text-black dark:border-gray-200'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-gray-400'
                   ]"
                 >
                   1080P
@@ -1218,8 +1218,8 @@ onUnmounted(() => {
             </div>
             
             <!-- VEO3模型提示（仅在图生视频模式下显示） -->
-            <div v-if="isVeo3Model && mode === 'image'" class="p-2.5 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-              <p class="text-xs text-blue-700 dark:text-blue-300">
+            <div v-if="isVeo3Model && mode === 'image'" class="p-2.5 bg-gray-100 dark:bg-gray-800/50 border border-gray-300 dark:border-gray-700 rounded-lg">
+              <p class="text-xs text-gray-700 dark:text-gray-300">
                 <span class="font-semibold">{{ getModelName(model) }}</span> 
                 <span v-if="model === 'veo3.1-components'">支持最多 3 张参考图</span>
                 <span v-else>支持最多 2 张参考图（首尾帧）</span>
@@ -1234,7 +1234,7 @@ onUnmounted(() => {
               </label>
               <div class="space-y-2">
                 <label class="flex items-center space-x-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                  <input type="checkbox" v-model="hd" class="rounded accent-primary-600" />
+                  <input type="checkbox" v-model="hd" class="rounded accent-gray-600" />
                   <span>HD 高清 (+{{ pointsCostConfig.hd_extra }}积分)</span>
                 </label>
               </div>
@@ -1262,13 +1262,13 @@ onUnmounted(() => {
                   <span>上传参考图片</span>
                 </label>
                 <div class="text-xs text-slate-500 dark:text-slate-400">
-                  <span class="font-semibold text-primary-600 dark:text-primary-400">{{ imageFiles.length }}</span> / {{ maxImagesForModel }}张
+                  <span class="font-semibold text-gray-700 dark:text-gray-300">{{ imageFiles.length }}</span> / {{ maxImagesForModel }}张
                 </div>
               </div>
               
               <!-- 图片数量超限提示 -->
-              <div v-if="imageFiles.length > maxImagesForModel" class="p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
-                <p class="text-xs text-amber-700 dark:text-amber-300">
+              <div v-if="imageFiles.length > maxImagesForModel" class="p-2 bg-gray-100 dark:bg-gray-800/50 border border-gray-300 dark:border-gray-700 rounded-lg">
+                <p class="text-xs text-gray-700 dark:text-gray-300">
                   ⚠️ 当前模型最多支持 {{ maxImagesForModel }} 张图片，请删除多余图片或切换模型
                 </p>
               </div>
@@ -1279,8 +1279,8 @@ onUnmounted(() => {
                 @dragover="onDragOver"
                 @dragleave="onDragLeave"
                 @drop="onDrop"
-                :class="{ 'border-primary-500 bg-primary-50 dark:bg-primary-900/20': isDragging }"
-                class="border-2 border-dashed border-slate-300 dark:border-dark-600 rounded-lg p-4 text-center transition-colors cursor-pointer hover:border-primary-400"
+                :class="{ 'border-gray-500 bg-gray-50 dark:bg-gray-800/30': isDragging }"
+                class="border-2 border-dashed border-slate-300 dark:border-dark-600 rounded-lg p-4 text-center transition-colors cursor-pointer hover:border-gray-400"
                 @click="triggerFileDialog"
               >
                 <div class="text-3xl mb-1.5">📤</div>
@@ -1332,7 +1332,7 @@ onUnmounted(() => {
                     class="relative group flex items-center space-x-2 bg-slate-50 dark:bg-dark-700 rounded-lg p-2 border border-slate-200 dark:border-dark-600"
                   >
                     <!-- 序号 -->
-                    <div class="flex-shrink-0 w-6 h-6 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-full flex items-center justify-center text-xs font-bold">
+                    <div class="flex-shrink-0 w-6 h-6 bg-gray-200 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300 rounded-full flex items-center justify-center text-xs font-bold">
                       {{ idx + 1 }}
                     </div>
                     
@@ -1388,31 +1388,31 @@ onUnmounted(() => {
             <!-- 并发限制提示 -->
             <div v-if="me" class="text-center">
               <p class="text-xs text-slate-500 dark:text-slate-400">
-                <span v-if="userPackageInfo.hasPackage" class="text-purple-600 dark:text-purple-400">
+                <span v-if="userPackageInfo.hasPackage" class="text-gray-700 dark:text-gray-300">
                   ⚡ VIP用户
                 </span>
                 <span v-else class="text-slate-600 dark:text-slate-400">
                   👤 普通用户
                 </span>
                 <span class="mx-1">·</span>
-                <span>最多支持 <span class="font-semibold text-primary-600 dark:text-primary-400">{{ me.concurrent_limit || 1 }}</span> 条并发任务</span>
+                <span>最多支持 <span class="font-semibold text-gray-700 dark:text-gray-300">{{ me.concurrent_limit || 1 }}</span> 条并发任务</span>
               </p>
             </div>
 
             <!-- 未登录提示 -->
-            <div v-if="!me" class="p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <div v-if="!me" class="p-3 bg-gradient-to-r from-gray-100 to-gray-50 dark:from-gray-800/30 dark:to-gray-900/30 border border-gray-300 dark:border-gray-700 rounded-lg">
               <div class="flex items-start space-x-2">
                 <span class="text-lg">🎁</span>
                 <div class="flex-1">
-                  <p class="text-xs font-semibold text-blue-800 dark:text-blue-300 mb-1">
+                  <p class="text-xs font-semibold text-gray-800 dark:text-gray-200 mb-1">
                     注册即送积分！
                   </p>
-                  <p class="text-xs text-blue-700 dark:text-blue-400">
+                  <p class="text-xs text-gray-700 dark:text-gray-400">
                     新用户注册可获得奖励积分，立即开始创作吧～
                   </p>
                   <a 
                     href="/" 
-                    class="mt-2 inline-block px-3 py-1.5 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded-md transition-colors font-medium"
+                    class="mt-2 inline-block px-3 py-1.5 bg-gray-700 hover:bg-gray-800 text-white text-xs rounded-md transition-colors font-medium"
                   >
                     立即注册/登录
                   </a>
@@ -1429,7 +1429,7 @@ onUnmounted(() => {
                 <a 
                   v-if="error.includes('未登录') || error.includes('请先登录')"
                   href="/" 
-                  class="ml-2 px-3 py-1 bg-primary-600 hover:bg-primary-700 text-white text-xs rounded-md transition-colors whitespace-nowrap"
+                  class="ml-2 px-3 py-1 bg-gray-700 hover:bg-gray-800 text-white text-xs rounded-md transition-colors whitespace-nowrap"
                 >
                   立即登录
                 </a>
@@ -1437,7 +1437,7 @@ onUnmounted(() => {
                 <a 
                   v-else-if="error.includes('如需多并发') && !userPackageInfo.hasPackage"
                   href="/packages" 
-                  class="ml-2 px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded-md transition-colors whitespace-nowrap"
+                  class="ml-2 px-3 py-1 bg-gray-700 hover:bg-gray-800 text-white text-xs rounded-md transition-colors whitespace-nowrap"
                 >
                   升级套餐
                 </a>
@@ -1445,8 +1445,8 @@ onUnmounted(() => {
             </div>
 
             <!-- 成功提示 -->
-            <div v-if="successMessage" class="p-2.5 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-              <p class="text-xs text-green-700 dark:text-green-400 flex items-center">
+            <div v-if="successMessage" class="p-2.5 bg-gray-100 dark:bg-gray-800/50 border border-gray-300 dark:border-gray-700 rounded-lg">
+              <p class="text-xs text-gray-700 dark:text-gray-300 flex items-center">
                 <span class="mr-1.5">✅</span>
                 <span>{{ successMessage }}</span>
               </p>
@@ -1462,13 +1462,13 @@ onUnmounted(() => {
             <h2 class="text-lg font-bold gradient-text flex items-center">
               <span class="mr-2">🎬</span>
               <span>输出视频库</span>
-              <span class="ml-2 px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-full text-xs font-semibold">
+              <span class="ml-2 px-2 py-0.5 bg-gray-200 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300 rounded-full text-xs font-semibold">
                 {{ gallery.length }}
               </span>
             </h2>
             <button 
               @click="loadHistory" 
-              class="text-sm text-primary-600 dark:text-primary-400 hover:underline"
+              class="text-sm text-gray-600 dark:text-gray-400 hover:underline"
             >
               刷新
             </button>
@@ -1476,7 +1476,7 @@ onUnmounted(() => {
 
           <!-- 空状态 - 开始创作 -->
           <div v-if="gallery.length === 0" class="text-center py-20">
-            <div class="w-20 h-20 mx-auto mb-5 bg-gradient-to-br from-primary-100 to-primary-200 dark:from-primary-900 dark:to-primary-800 rounded-2xl flex items-center justify-center shadow-lg">
+            <div class="w-20 h-20 mx-auto mb-5 bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-800 rounded-2xl flex items-center justify-center shadow-lg">
               <span class="text-4xl">🎬</span>
             </div>
             <h3 class="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">
@@ -1496,34 +1496,34 @@ onUnmounted(() => {
             >
               <!-- 生成中状态 -->
               <div v-if="isProcessingStatus(item.status)" 
-                class="rounded-lg overflow-hidden bg-gradient-to-br from-purple-50 via-blue-50 to-pink-50 dark:from-purple-900/20 dark:via-blue-900/20 dark:to-pink-900/20 aspect-video relative">
+                class="rounded-lg overflow-hidden bg-gradient-to-br from-gray-100 via-gray-50 to-gray-100 dark:from-gray-800/40 dark:via-gray-900/40 dark:to-gray-800/40 aspect-video relative">
                 <!-- 动态背景动效 -->
-                <div class="absolute inset-0 bg-gradient-to-br from-purple-100/50 via-blue-100/50 to-pink-100/50 dark:from-purple-800/10 dark:via-blue-800/10 dark:to-pink-800/10 animate-pulse"></div>
+                <div class="absolute inset-0 bg-gradient-to-br from-gray-200/50 via-gray-100/50 to-gray-200/50 dark:from-gray-700/20 dark:via-gray-800/20 dark:to-gray-700/20 animate-pulse"></div>
                 
                 <!-- 装饰性闪光元素 -->
                 <div class="absolute inset-0 overflow-hidden opacity-30">
-                  <div class="absolute top-1/4 left-1/4 w-32 h-32 bg-primary-300 dark:bg-primary-500/30 rounded-full blur-3xl animate-blob"></div>
-                  <div class="absolute top-1/3 right-1/4 w-32 h-32 bg-purple-300 dark:bg-purple-500/30 rounded-full blur-3xl animate-blob animation-delay-2000"></div>
-                  <div class="absolute bottom-1/4 left-1/3 w-32 h-32 bg-pink-300 dark:bg-pink-500/30 rounded-full blur-3xl animate-blob animation-delay-4000"></div>
+                  <div class="absolute top-1/4 left-1/4 w-32 h-32 bg-gray-300 dark:bg-gray-500/30 rounded-full blur-3xl animate-blob"></div>
+                  <div class="absolute top-1/3 right-1/4 w-32 h-32 bg-gray-400 dark:bg-gray-400/30 rounded-full blur-3xl animate-blob animation-delay-2000"></div>
+                  <div class="absolute bottom-1/4 left-1/3 w-32 h-32 bg-gray-300 dark:bg-gray-500/30 rounded-full blur-3xl animate-blob animation-delay-4000"></div>
                 </div>
                 
                 <div class="absolute inset-0 flex flex-col items-center justify-center z-10">
                   <!-- 旋转加载图标 -->
-                  <svg class="animate-spin h-16 w-16 text-primary-500 mb-3 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <svg class="animate-spin h-16 w-16 text-gray-500 mb-3 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
                   
                   <p class="text-slate-700 dark:text-slate-200 text-base font-bold mb-2">正在生成精彩视频...</p>
-                  <p v-if="item.progress" class="text-primary-600 dark:text-primary-400 text-sm font-semibold mb-3 animate-pulse">{{ item.progress }}</p>
+                  <p v-if="item.progress" class="text-gray-600 dark:text-gray-400 text-sm font-semibold mb-3 animate-pulse">{{ item.progress }}</p>
                   <p v-else class="text-slate-500 dark:text-slate-400 text-sm mb-3">AI正在为您创作中...</p>
                   
                   <!-- 进度条效果 -->
                   <div class="w-48 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                    <div class="h-full bg-gradient-to-r from-primary-500 via-purple-500 to-pink-500 rounded-full animate-loading-bar"></div>
+                    <div class="h-full bg-gradient-to-r from-gray-400 via-gray-500 to-gray-400 rounded-full animate-loading-bar"></div>
                   </div>
                   
-                  <p class="text-primary-500 dark:text-primary-400 text-xs mt-4 font-medium px-6 text-center">
+                  <p class="text-gray-500 dark:text-gray-400 text-xs mt-4 font-medium px-6 text-center">
                     ✨ 视频生成需要一定时间，您可以继续创作新视频
                   </p>
                 </div>
@@ -1531,13 +1531,13 @@ onUnmounted(() => {
               
               <!-- 失败状态 -->
               <div v-else-if="isFailedStatus(item.status)" 
-                class="rounded-lg overflow-hidden bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 aspect-video relative">
+                class="rounded-lg overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800/40 dark:to-gray-700/40 aspect-video relative">
                 <div class="absolute inset-0 flex flex-col items-center justify-center p-4">
                   <div class="text-4xl mb-3">❌</div>
-                  <p class="text-red-600 dark:text-red-400 text-base font-semibold text-center">{{ formatStatus(item.status) }}</p>
-                  <p v-if="item.fail_reason" class="text-red-500 dark:text-red-500 text-xs mt-2 text-center opacity-75">{{ item.fail_reason }}</p>
-                  <p v-else class="text-red-500 dark:text-red-500 text-xs mt-2 text-center opacity-75">请稍后重试</p>
-                  <p class="text-sm text-green-600 dark:text-green-400 mt-3 font-medium">✓ 未扣除积分</p>
+                  <p class="text-gray-700 dark:text-gray-300 text-base font-semibold text-center">{{ formatStatus(item.status) }}</p>
+                  <p v-if="item.fail_reason" class="text-gray-500 dark:text-gray-400 text-xs mt-2 text-center opacity-75">{{ item.fail_reason }}</p>
+                  <p v-else class="text-gray-500 dark:text-gray-400 text-xs mt-2 text-center opacity-75">请稍后重试</p>
+                  <p class="text-sm text-gray-600 dark:text-gray-400 mt-3 font-medium">✓ 未扣除积分</p>
                 </div>
               </div>
               
@@ -1597,7 +1597,7 @@ onUnmounted(() => {
                     @blur="(e) => updateVideoNote(item, e.target.value)"
                     @keyup.enter="(e) => { updateVideoNote(item, e.target.value); e.target.blur() }"
                     placeholder="添加备注..."
-                    class="w-full px-2 py-1 text-xs bg-white dark:bg-dark-600 border border-slate-200 dark:border-dark-500 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-600 dark:text-slate-300 placeholder-slate-400"
+                    class="w-full px-2 py-1 text-xs bg-white dark:bg-dark-600 border border-slate-200 dark:border-dark-500 rounded focus:outline-none focus:ring-1 focus:ring-gray-500 text-slate-600 dark:text-slate-300 placeholder-slate-400"
                   />
                 </div>
                 
@@ -1635,7 +1635,7 @@ onUnmounted(() => {
         >
           <button
             @click="toggleHistoryDrawer"
-            class="relative bg-primary-600 hover:bg-primary-700 text-white rounded-l-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center"
+            class="relative bg-gray-700 hover:bg-gray-800 text-white rounded-l-2xl shadow-lg hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center"
             style="width: 56px; height: 120px;"
             title="打开历史记录"
           >
@@ -1656,13 +1656,13 @@ onUnmounted(() => {
           <!-- 抽屉头部 -->
           <div class="flex items-center justify-between p-3.5 border-b border-slate-200 dark:border-dark-600 bg-white dark:bg-dark-800">
             <div class="flex items-center space-x-2.5">
-              <div class="w-9 h-9 bg-gradient-to-br from-primary-500 to-primary-600 rounded-full flex items-center justify-center text-white shadow-md">
+              <div class="w-9 h-9 bg-gradient-to-br from-gray-500 to-gray-600 rounded-full flex items-center justify-center text-white shadow-md">
                 <span class="text-lg">🎬</span>
               </div>
               <div>
                 <h3 class="text-base font-bold text-slate-900 dark:text-white flex items-center">
                   历史记录
-                  <span class="ml-2 px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 rounded-full text-xs font-semibold">
+                  <span class="ml-2 px-2 py-0.5 bg-gray-200 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300 rounded-full text-xs font-semibold">
                     {{ history.length }}
                   </span>
                 </h3>
@@ -1692,12 +1692,12 @@ onUnmounted(() => {
             <div
               v-for="item in history"
               :key="item.id"
-              class="group bg-white dark:bg-dark-800 rounded-xl p-3 border border-slate-200 dark:border-dark-700 hover:border-primary-300 dark:hover:border-primary-600 transition-all duration-200 hover:shadow-lg"
+              class="group bg-white dark:bg-dark-800 rounded-xl p-3 border border-slate-200 dark:border-dark-700 hover:border-gray-400 dark:hover:border-gray-500 transition-all duration-200 hover:shadow-lg"
             >
               <!-- 视频预览 -->
               <div 
-                class="relative w-full aspect-video rounded-lg overflow-hidden cursor-pointer mb-3 group-hover:ring-2 group-hover:ring-primary-400 transition-all" 
-                :class="item.video_url ? 'bg-black' : 'bg-gradient-to-br from-purple-50 via-blue-50 to-pink-50 dark:from-purple-900/20 dark:via-blue-900/20 dark:to-pink-900/20'"
+                class="relative w-full aspect-video rounded-lg overflow-hidden cursor-pointer mb-3 group-hover:ring-2 group-hover:ring-gray-400 transition-all" 
+                :class="item.video_url ? 'bg-black' : 'bg-gradient-to-br from-gray-100 via-gray-50 to-gray-100 dark:from-gray-800/40 dark:via-gray-900/40 dark:to-gray-800/40'"
                 @click="openVideoModal(item)"
               >
                 <video
@@ -1710,30 +1710,30 @@ onUnmounted(() => {
                 <!-- 生成中状态 -->
                 <div v-else-if="isProcessingStatus(item.status)" class="absolute inset-0 flex flex-col items-center justify-center">
                   <!-- 动态背景 -->
-                  <div class="absolute inset-0 bg-gradient-to-br from-purple-100/50 via-blue-100/50 to-pink-100/50 dark:from-purple-800/10 dark:via-blue-800/10 dark:to-pink-800/10 animate-pulse"></div>
+                  <div class="absolute inset-0 bg-gradient-to-br from-gray-200/50 via-gray-100/50 to-gray-200/50 dark:from-gray-700/20 dark:via-gray-800/20 dark:to-gray-700/20 animate-pulse"></div>
                   
                   <!-- 内容 -->
                   <div class="relative z-10 text-center">
                     <!-- 加载旋转图标 -->
-                    <svg class="animate-spin h-10 w-10 text-primary-500 mb-2 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg class="animate-spin h-10 w-10 text-gray-500 mb-2 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                     <p class="text-xs text-slate-700 dark:text-slate-300 font-semibold">正在生成中...</p>
-                    <p v-if="item.progress" class="text-xs text-primary-600 dark:text-primary-400 mt-1 animate-pulse">{{ item.progress }}</p>
+                    <p v-if="item.progress" class="text-xs text-gray-600 dark:text-gray-400 mt-1 animate-pulse">{{ item.progress }}</p>
                     <p v-else class="text-xs text-slate-500 dark:text-slate-400 mt-1 opacity-75">AI正在创作中</p>
                   </div>
                 </div>
                 <!-- 失败状态 -->
-                <div v-else-if="isFailedStatus(item.status)" class="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20">
+                <div v-else-if="isFailedStatus(item.status)" class="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800/40 dark:to-gray-700/40">
                   <div class="text-3xl mb-2">❌</div>
-                  <p class="text-xs text-red-600 dark:text-red-400 font-semibold">{{ formatStatus(item.status) }}</p>
-                  <p v-if="item.fail_reason" class="text-xs text-red-500 dark:text-red-500 mt-1 text-center px-4 line-clamp-2">{{ item.fail_reason }}</p>
-                  <p class="text-xs text-green-600 dark:text-green-400 mt-1 font-medium">✓ 未扣除积分</p>
+                  <p class="text-xs text-gray-700 dark:text-gray-300 font-semibold">{{ formatStatus(item.status) }}</p>
+                  <p v-if="item.fail_reason" class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-center px-4 line-clamp-2">{{ item.fail_reason }}</p>
+                  <p class="text-xs text-gray-600 dark:text-gray-400 mt-1 font-medium">✓ 未扣除积分</p>
                 </div>
                 <!-- 其他未知状态 - 默认显示为等待中 -->
-                <div v-else class="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20">
-                  <svg class="animate-spin h-8 w-8 text-primary-500 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <div v-else class="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800/40 dark:to-gray-900/40">
+                  <svg class="animate-spin h-8 w-8 text-gray-500 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
@@ -1796,21 +1796,21 @@ onUnmounted(() => {
                     @blur="(e) => updateVideoNote(item, e.target.value)"
                     @keyup.enter="(e) => { updateVideoNote(item, e.target.value); e.target.blur() }"
                     placeholder="添加备注（如分镜信息）..."
-                    class="w-full px-2 py-1 text-xs bg-white dark:bg-dark-600 border border-slate-200 dark:border-dark-500 rounded focus:outline-none focus:ring-1 focus:ring-primary-500 text-slate-600 dark:text-slate-300 placeholder-slate-400"
+                    class="w-full px-2 py-1 text-xs bg-white dark:bg-dark-600 border border-slate-200 dark:border-dark-500 rounded focus:outline-none focus:ring-1 focus:ring-gray-500 text-slate-600 dark:text-slate-300 placeholder-slate-400"
                   />
                 </div>
 
                 <!-- 失败原因 -->
-                <div v-if="isFailedStatus(item.status)" class="text-xs bg-red-50 dark:bg-red-900/20 p-2 rounded space-y-1">
-                  <p v-if="item.fail_reason" class="text-red-500">{{ item.fail_reason }}</p>
-                  <p class="text-green-600 dark:text-green-400 font-medium">✓ 未扣除积分</p>
+                <div v-if="isFailedStatus(item.status)" class="text-xs bg-gray-100 dark:bg-gray-800/50 p-2 rounded space-y-1">
+                  <p v-if="item.fail_reason" class="text-gray-600 dark:text-gray-400">{{ item.fail_reason }}</p>
+                  <p class="text-gray-600 dark:text-gray-400 font-medium">✓ 未扣除积分</p>
                 </div>
 
                 <!-- 操作按钮 -->
                 <div class="flex items-center gap-2 pt-2">
                   <!-- 再次生成按钮 -->
                   <button 
-                    class="w-10 h-8 rounded-lg bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors flex items-center justify-center"
+                    class="w-10 h-8 rounded-lg bg-gray-200 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
                     @click="regenerateFromHistory(item)"
                     title="再次生成"
                   >
@@ -1833,7 +1833,7 @@ onUnmounted(() => {
                     下载
                   </button>
                   <button 
-                    class="w-10 h-8 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors flex items-center justify-center"
+                    class="w-10 h-8 rounded-lg bg-gray-200 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors flex items-center justify-center"
                     @click="deleteHistory(item)"
                     title="删除"
                   >
@@ -1919,11 +1919,11 @@ onUnmounted(() => {
 }
 
 .input {
-  @apply w-full px-3 py-2 border border-slate-300 dark:border-dark-600 rounded-lg bg-white dark:bg-dark-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all;
+  @apply w-full px-3 py-2 border border-slate-300 dark:border-dark-600 rounded-lg bg-white dark:bg-dark-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all;
 }
 
 .btn-primary {
-  @apply bg-gradient-to-r from-primary-600 to-pink-600 text-white rounded-lg font-medium hover:shadow-lg transition-all duration-300 hover:scale-[1.02];
+  @apply bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg font-medium hover:shadow-lg transition-all duration-300 hover:scale-[1.02];
 }
 
 .btn-secondary {

@@ -964,11 +964,27 @@ function handleAddClick(event) {
   border-color: var(--canvas-border-default, #4a4a4a);
 }
 
+/* 黑白灰风格图标 - 实色渐变 */
 .model-icon {
-  font-size: 14px;
-  line-height: 1;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  /* 黑白灰渐变背景 */
+  background: linear-gradient(145deg, #4a4a4a 0%, #2d2d2d 50%, #1a1a1a 100%);
+  color: #ffffff;
+  border-radius: 6px;
+  border: 1px solid #5a5a5a;
+  box-shadow: 
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .model-icon-img {
@@ -1032,9 +1048,28 @@ function handleAddClick(event) {
   gap: 6px;
 }
 
+/* 下拉列表中的黑白灰图标 - 实色渐变 */
 .model-item-icon {
-  font-size: 14px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
   line-height: 1;
+  /* 黑白灰渐变背景 */
+  background: linear-gradient(145deg, #4a4a4a 0%, #2d2d2d 50%, #1a1a1a 100%);
+  color: #ffffff;
+  border-radius: 5px;
+  border: 1px solid #5a5a5a;
+  box-shadow: 
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.15);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  flex-shrink: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .model-item-label {
