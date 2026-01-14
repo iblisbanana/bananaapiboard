@@ -57,8 +57,10 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([byteArray], { type: mime })
 }
 
-// 统一使用后端代理下载，解决跨域和第三方CDN预览问题
-// 对于 dataUrl 格式的图片（如裁剪后的图片），直接在前端下载
+// 下载
+// - dataUrl/blob URL：直接在前端转换下载
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function download() {
   let mediaUrl = ''
   let fileName = ''
@@ -77,7 +79,6 @@ async function download() {
   
   try {
     // 如果是 dataUrl（base64），直接在前端转换为 Blob 下载
-    // 避免 URL 过长导致请求失败（dataUrl 通常几十KB到几MB）
     if (mediaUrl.startsWith('data:')) {
       console.log('[PreviewNode] dataUrl 格式，使用前端直接下载')
       const blob = dataUrlToBlob(mediaUrl)
@@ -108,13 +109,25 @@ async function download() {
       return
     }
     
-    // 其他 URL 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const { getApiUrl } = await import('@/config/tenant')
-    const proxyPath = isVideo
-      ? `/api/videos/download?url=${encodeURIComponent(mediaUrl)}&name=${encodeURIComponent(fileName)}`
-      : `/api/images/download?url=${encodeURIComponent(mediaUrl)}&filename=${encodeURIComponent(fileName)}`
-    const downloadUrl = getApiUrl(proxyPath)
+    // 使用统一的下载函数
+    const { buildDownloadUrl, buildVideoDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = isVideo
+      ? buildVideoDownloadUrl(mediaUrl, fileName)
+      : buildDownloadUrl(mediaUrl, fileName)
     
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(mediaUrl)) {
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      console.log('[PreviewNode] 七牛云直接下载:', fileName)
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
     })
@@ -134,13 +147,13 @@ async function download() {
     window.URL.revokeObjectURL(url)
   } catch (error) {
     console.error('[PreviewNode] 下载失败:', error)
-    // 回退：使用后端代理页面下载
+    // 回退：使用页面跳转下载
     try {
-      const { getApiUrl } = await import('@/config/tenant')
-      const proxyPath = isVideo
-        ? `/api/videos/download?url=${encodeURIComponent(mediaUrl)}&name=${encodeURIComponent(fileName)}`
-        : `/api/images/download?url=${encodeURIComponent(mediaUrl)}&filename=${encodeURIComponent(fileName)}`
-      window.location.href = getApiUrl(proxyPath)
+      const { buildDownloadUrl, buildVideoDownloadUrl } = await import('@/api/client')
+      const downloadUrl = isVideo
+        ? buildVideoDownloadUrl(mediaUrl, fileName)
+        : buildDownloadUrl(mediaUrl, fileName)
+      window.location.href = downloadUrl
     } catch (e) {
       console.error('[PreviewNode] 所有下载方式都失败:', e)
     }

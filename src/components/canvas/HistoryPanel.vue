@@ -342,23 +342,6 @@ async function confirmDelete() {
   }
 }
 
-// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
-function isQiniuCdnUrl(url) {
-  if (!url || typeof url !== 'string') return false
-  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
-         url.includes('qiniucdn.com') || 
-         url.includes('clouddn.com') || 
-         url.includes('qnssl.com') ||
-         url.includes('qbox.me')
-}
-
-// 构建七牛云强制下载URL（使用attname参数）
-function buildQiniuForceDownloadUrl(url, filename) {
-  if (!url || !filename) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}attname=${encodeURIComponent(filename)}`
-}
-
 // 获取正确的文件扩展名
 function getFileExtension(type, url) {
   // 优先从URL中提取扩展名
@@ -378,7 +361,9 @@ function getFileExtension(type, url) {
   }
 }
 
-// 统一使用后端代理下载，解决跨域和第三方CDN预览问题
+// 下载历史记录
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function handleDownload(item) {
   if (!item.url) return
   closeContextMenu()
@@ -394,12 +379,25 @@ async function handleDownload(item) {
   console.log('[HistoryPanel] 开始下载:', { url: item.url.substring(0, 60), filename })
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const proxyPath = item.type === 'video' 
-      ? `/api/videos/download?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(filename)}`
-      : `/api/images/download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`
-    const downloadUrl = getApiUrl(proxyPath)
+    const { buildDownloadUrl, buildVideoDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = item.type === 'video'
+      ? buildVideoDownloadUrl(item.url, filename)
+      : buildDownloadUrl(item.url, filename)
     
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(item.url)) {
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = filename
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      console.log('[HistoryPanel] 七牛云直接下载:', filename)
+      setTimeout(() => document.body.removeChild(a), 100)
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
     })
@@ -429,11 +427,16 @@ async function handleDownload(item) {
   } catch (error) {
     console.error('[HistoryPanel] 下载失败:', error)
     
-    // 回退：使用后端代理页面下载
-    const proxyPath = item.type === 'video' 
-      ? `/api/videos/download?url=${encodeURIComponent(item.url)}&name=${encodeURIComponent(filename)}`
-      : `/api/images/download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`
-    window.location.href = getApiUrl(proxyPath)
+    // 回退：使用页面跳转下载
+    try {
+      const { buildDownloadUrl, buildVideoDownloadUrl } = await import('@/api/client')
+      const downloadUrl = item.type === 'video'
+        ? buildVideoDownloadUrl(item.url, filename)
+        : buildDownloadUrl(item.url, filename)
+      window.location.href = downloadUrl
+    } catch (e) {
+      console.error('[HistoryPanel] 所有下载方式都失败:', e)
+    }
   }
 }
 

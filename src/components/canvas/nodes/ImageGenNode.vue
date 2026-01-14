@@ -392,24 +392,9 @@ async function useTool(action) {
   await showAlert(`${action} 功能开发中...`, '提示')
 }
 
-// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
-function isQiniuCdnUrl(url) {
-  if (!url || typeof url !== 'string') return false
-  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
-         url.includes('qiniucdn.com') || 
-         url.includes('clouddn.com') || 
-         url.includes('qnssl.com') ||
-         url.includes('qbox.me')
-}
-
-// 构建七牛云强制下载URL（使用attname参数）
-function buildQiniuForceDownloadUrl(url, filename) {
-  if (!url || !filename) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}attname=${encodeURIComponent(filename)}`
-}
-
-// 统一使用后端代理下载图片，解决跨域和第三方CDN预览问题
+// 下载图片
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function downloadImage() {
   if (outputImages.value.length === 0) return
   
@@ -417,10 +402,21 @@ async function downloadImage() {
   const filename = `image_${props.id || Date.now()}.png`
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const { getApiUrl } = await import('@/config/tenant')
-    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl)}&filename=${encodeURIComponent(filename)}`)
+    const { buildDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = buildDownloadUrl(imageUrl, filename)
     
+    // 七牛云 URL 直接下载
+    if (isQiniuCdnUrl(imageUrl)) {
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
     })
@@ -440,10 +436,10 @@ async function downloadImage() {
     window.URL.revokeObjectURL(url)
   } catch (error) {
     console.error('[ImageGenNode] 下载图片失败:', error)
-    // 回退：使用后端代理页面下载
+    // 回退：使用页面跳转下载
     try {
-      const { getApiUrl } = await import('@/config/tenant')
-      window.location.href = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl)}&filename=${encodeURIComponent(filename)}`)
+      const { buildDownloadUrl } = await import('@/api/client')
+      window.location.href = buildDownloadUrl(imageUrl, filename)
     } catch (e) {
       console.error('[ImageGenNode] 所有下载方式都失败:', e)
     }

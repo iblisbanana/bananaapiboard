@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { generateImage, buildDownloadUrl, uploadImages, getMe, redeemVoucher } from '@/api/client'
+import { generateImage, buildDownloadUrl, uploadImages, getMe, redeemVoucher, isQiniuCdnUrl } from '@/api/client'
 import ImageAnnotator from '@/components/ImageAnnotator.vue'
 import MentionDropdown from '@/components/MentionDropdown.vue'
 import PromptInputWithTags from '@/components/PromptInputWithTags.vue'
@@ -1111,11 +1111,11 @@ function resetImageTransform() {
   imageTranslate.value = { x: 0, y: 0 }
 }
 
-// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
-// 下载图片 - 统一走后端代理下载，避免跨域问题
+// 下载图片
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 本地文件/其他 URL：走后端代理下载
 function download(url, filename) {
   const fname = filename || 'image.png'
-  // 所有图片统一走后端代理下载，设置正确的 Content-Disposition 头
   const downloadUrl = buildDownloadUrl(url, fname)
   const link = document.createElement('a')
   link.href = downloadUrl
@@ -1133,20 +1133,8 @@ function downloadHistoryImage(item) {
   const notePrefix = item.note ? item.note.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_').slice(0, 50) + '_' : ''
   const filename = `${notePrefix}${modelName}_${timestamp}.png`
   
-  let downloadUrl = item.url
-  
-  // 如果 URL 是相对路径（/api/images/file/xxx），使用完整路径
-  if (item.url.startsWith('/api/images/file/')) {
-    const id = item.url.split('/').pop()
-    downloadUrl = `/api/images/download/${id}?filename=${encodeURIComponent(filename)}`
-  } else if (!item.url.startsWith('http')) {
-    // 其他相对路径，添加域名
-    downloadUrl = window.location.origin + item.url
-  } else {
-    // 所有外部 URL（包括七牛云），统一走后端代理下载
-    // 后端会设置 Content-Disposition: attachment 头，解决跨域下载问题
-    downloadUrl = buildDownloadUrl(item.url, filename)
-  }
+  // 使用统一的下载函数（会自动判断七牛云 URL 直接下载，其他走后端代理）
+  const downloadUrl = buildDownloadUrl(item.url, filename)
   
   const link = document.createElement('a')
   link.href = downloadUrl

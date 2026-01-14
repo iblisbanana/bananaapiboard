@@ -83,6 +83,42 @@ export async function uploadImages(files) {
   return j.urls || []
 }
 
+/**
+ * 判断是否是七牛云 CDN URL（可以直接下载，不需要走后端代理）
+ * @param {string} url - 要检查的 URL
+ * @returns {boolean}
+ */
+export function isQiniuCdnUrl(url) {
+  if (!url || typeof url !== 'string') return false
+  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云 CDN 域名
+         url.includes('oss.nananobanana.cn') ||    // 项目的七牛云源站域名
+         url.includes('qiniucdn.com') || 
+         url.includes('clouddn.com') || 
+         url.includes('qnssl.com') ||
+         url.includes('qbox.me')
+}
+
+/**
+ * 构建七牛云强制下载 URL（使用 attname 参数）
+ * @param {string} url - 七牛云 URL
+ * @param {string} filename - 下载时的文件名
+ * @returns {string}
+ */
+export function buildQiniuForceDownloadUrl(url, filename) {
+  if (!url || !filename) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}attname=${encodeURIComponent(filename)}`
+}
+
+/**
+ * 构建图片下载 URL
+ * - 七牛云 URL：直接使用 attname 参数下载（节省服务器出站流量）
+ * - 本地文件：使用后端下载接口
+ * - 其他外部 URL：走后端代理下载（解决跨域问题）
+ * @param {string} url - 要下载的资源 URL
+ * @param {string} filename - 下载时的文件名
+ * @returns {string}
+ */
 export function buildDownloadUrl(url, filename) {
   // 本地文件路径，使用专用下载接口
   if (url && url.startsWith('/api/images/file/')) {
@@ -90,10 +126,35 @@ export function buildDownloadUrl(url, filename) {
     const q = filename ? `?filename=${encodeURIComponent(filename)}` : ''
     return getApiUrl(`/api/images/download/${id}${q}`)
   }
-  // 所有外部URL（包括七牛云），统一走后端代理下载
+  
+  // 七牛云 URL：直接使用 attname 参数下载，不走后端代理（节省服务器流量）
+  if (isQiniuCdnUrl(url)) {
+    return buildQiniuForceDownloadUrl(url, filename || 'download')
+  }
+  
+  // 其他外部 URL：走后端代理下载
   // 后端会设置 Content-Disposition: attachment 头，解决跨域下载问题
   const params = new URLSearchParams({ url, filename })
   return getApiUrl(`/api/images/download?${params.toString()}`)
+}
+
+/**
+ * 构建视频下载 URL
+ * - 七牛云 URL：直接使用 attname 参数下载（节省服务器出站流量）
+ * - 其他外部 URL：走后端代理下载（解决跨域问题）
+ * @param {string} url - 要下载的视频 URL
+ * @param {string} filename - 下载时的文件名
+ * @returns {string}
+ */
+export function buildVideoDownloadUrl(url, filename) {
+  // 七牛云 URL：直接使用 attname 参数下载，不走后端代理（节省服务器流量）
+  if (isQiniuCdnUrl(url)) {
+    return buildQiniuForceDownloadUrl(url, filename || 'video.mp4')
+  }
+  
+  // 其他外部 URL：走后端代理下载
+  // 后端会设置 Content-Disposition: attachment 头，解决跨域下载问题
+  return getApiUrl(`/api/videos/download?url=${encodeURIComponent(url)}&name=${encodeURIComponent(filename || 'video.mp4')}`)
 }
 
 export async function getMe(forceRefresh = false) {

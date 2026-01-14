@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { getMe } from '@/api/client'
+import { getMe, isQiniuCdnUrl, buildVideoDownloadUrl } from '@/api/client'
 import { getTenantHeaders, getModelDisplayName, isModelEnabled, getAvailableVideoModels } from '@/config/tenant'
 import { shouldHistoryDrawerOpenByDefault } from '@/utils/deviceDetection'
 
@@ -765,20 +765,32 @@ async function deleteHistory(item) {
   }
 }
 
-// 统一走后端代理下载视频，解决跨域和第三方CDN预览问题
+// 下载视频
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function downloadVideo(item) {
   if (!item?.video_url) return
   try {
     // 如果有备注，将备注添加到文件名开头（移除特殊字符）
     const notePrefix = item.note ? item.note.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_').slice(0, 30) + '_' : ''
     const promptPart = (item.prompt || 'video').slice(0, 20).replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_')
-    const filename = `${notePrefix}${promptPart}`
+    const filename = `${notePrefix}${promptPart}.mp4`
     
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    // 解决第三方CDN和七牛云的跨域下载问题
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(item.video_url)) {
+      const downloadUrl = buildVideoDownloadUrl(item.video_url, filename)
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const token = localStorage.getItem('token')
-    const encodedFilename = encodeURIComponent(filename)
-    const response = await fetch(`/api/videos/download?url=${encodeURIComponent(item.video_url)}&name=${encodedFilename}.mp4`, {
+    const response = await fetch(`/api/videos/download?url=${encodeURIComponent(item.video_url)}&name=${encodeURIComponent(filename)}`, {
       headers: { ...getTenantHeaders(), ...(token ? { Authorization: `Bearer ${token}` } : {}) }
     })
     if (!response.ok) throw new Error('下载失败')
@@ -786,7 +798,7 @@ async function downloadVideo(item) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${filename}.mp4`
+    a.download = filename
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

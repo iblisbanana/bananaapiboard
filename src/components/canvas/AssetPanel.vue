@@ -576,18 +576,9 @@ function handleAddToCanvas() {
   }
 }
 
-// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
-function isQiniuCdnUrl(url) {
-  if (!url || typeof url !== 'string') return false
-  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
-         url.includes('qiniucdn.com') || 
-         url.includes('clouddn.com') || 
-         url.includes('qnssl.com') ||
-         url.includes('qbox.me')
-}
-
-// 构建七牛云强制下载URL（使用attname参数）
-// 右键菜单 - 统一使用后端代理下载资产，解决跨域和第三方CDN预览问题
+// 右键菜单 - 下载资产
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function handleDownload() {
   if (!contextMenuAsset.value) return
   
@@ -628,12 +619,25 @@ async function handleDownload() {
     
     console.log('[AssetPanel] 开始下载:', { url: assetUrl.substring(0, 60), filename })
     
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const proxyPath = asset.type === 'video' 
-      ? `/api/videos/download?url=${encodeURIComponent(assetUrl)}&name=${encodeURIComponent(filename)}`
-      : `/api/images/download?url=${encodeURIComponent(assetUrl)}&filename=${encodeURIComponent(filename)}`
-    const downloadUrl = getApiUrl(proxyPath)
+    const { buildDownloadUrl, buildVideoDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = asset.type === 'video'
+      ? buildVideoDownloadUrl(assetUrl, filename)
+      : buildDownloadUrl(assetUrl, filename)
     
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(assetUrl)) {
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      console.log('[AssetPanel] 七牛云直接下载:', filename)
+      setTimeout(() => document.body.removeChild(link), 100)
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     try {
       const response = await fetch(downloadUrl, {
         headers: getTenantHeaders()
@@ -660,8 +664,8 @@ async function handleDownload() {
         URL.revokeObjectURL(blobUrl)
       }, 100)
     } catch (fetchError) {
-      console.warn('[AssetPanel] fetch 下载失败，使用后端代理页面下载:', fetchError)
-      // 回退：使用后端代理页面下载
+      console.warn('[AssetPanel] fetch 下载失败，使用页面跳转下载:', fetchError)
+      // 回退：使用页面跳转下载
       window.location.href = downloadUrl
     }
   } catch (error) {

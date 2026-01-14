@@ -341,34 +341,31 @@ function closeFullscreenPreview() {
   emit('close')
 }
 
-// 判断是否是七牛云 CDN URL（永久有效，可直接访问）
-function isQiniuCdnUrl(url) {
-  if (!url || typeof url !== 'string') return false
-  return url.includes('files.nananobanana.cn') ||  // 项目的七牛云域名
-         url.includes('qiniucdn.com') || 
-         url.includes('clouddn.com') || 
-         url.includes('qnssl.com') ||
-         url.includes('qbox.me')
-}
-
-// 构建七牛云强制下载URL（使用attname参数）
-function buildQiniuForceDownloadUrl(url, filename) {
-  if (!url || !filename) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}attname=${encodeURIComponent(filename)}`
-}
-
-// 统一使用后端代理下载视频，解决跨域和第三方CDN预览问题
+// 下载视频
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function downloadVideo() {
   if (!videoUrl.value) return
   
   const filename = `video_${Date.now()}.mp4`
   
   try {
-    // 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const { getApiUrl } = await import('@/config/tenant')
-    const downloadUrl = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl.value)}&name=${encodeURIComponent(filename)}`)
+    const { buildVideoDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = buildVideoDownloadUrl(videoUrl.value, filename)
     
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(videoUrl.value)) {
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      emit('close')
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
     })
@@ -390,10 +387,10 @@ async function downloadVideo() {
     emit('close')
   } catch (error) {
     console.error('下载视频失败:', error)
-    // 回退：使用后端代理页面下载
+    // 回退：使用页面跳转下载
     try {
-      const { getApiUrl } = await import('@/config/tenant')
-      window.location.href = getApiUrl(`/api/videos/download?url=${encodeURIComponent(videoUrl.value)}&name=${encodeURIComponent(filename)}`)
+      const { buildVideoDownloadUrl } = await import('@/api/client')
+      window.location.href = buildVideoDownloadUrl(videoUrl.value, filename)
     } catch (e) {
       console.error('所有下载方式都失败:', e)
     }
@@ -417,8 +414,10 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([byteArray], { type: mime })
 }
 
-// 统一使用后端代理下载图片，解决跨域和第三方CDN预览问题
-// 对于 dataUrl 格式的图片（如裁剪后的图片），直接在前端下载
+// 下载图片
+// - dataUrl/blob URL：直接在前端转换下载
+// - 七牛云 URL：直接使用 attname 参数下载（节省服务器流量）
+// - 其他 URL：走后端代理下载（解决跨域问题）
 async function downloadImage() {
   if (!imageUrl.value) return
   
@@ -428,7 +427,6 @@ async function downloadImage() {
     const url = imageUrl.value
     
     // 如果是 dataUrl（base64），直接在前端转换为 Blob 下载
-    // 避免 URL 过长导致请求失败（dataUrl 通常几十KB到几MB）
     if (url.startsWith('data:')) {
       console.log('[NodeContextMenu] dataUrl 格式图片，使用前端直接下载')
       const blob = dataUrlToBlob(url)
@@ -461,10 +459,23 @@ async function downloadImage() {
       return
     }
     
-    // 其他 URL 统一走后端代理下载，后端会设置 Content-Disposition: attachment 头
-    const { getApiUrl } = await import('@/config/tenant')
-    const downloadUrl = getApiUrl(`/api/images/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(filename)}`)
+    // 使用统一的下载函数
+    const { buildDownloadUrl, isQiniuCdnUrl } = await import('@/api/client')
+    const downloadUrl = buildDownloadUrl(url, filename)
     
+    // 七牛云 URL 直接下载（节省服务器流量）
+    if (isQiniuCdnUrl(url)) {
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      emit('close')
+      return
+    }
+    
+    // 其他 URL 走后端代理下载
     const response = await fetch(downloadUrl, {
       headers: getTenantHeaders()
     })
@@ -486,10 +497,10 @@ async function downloadImage() {
     emit('close')
   } catch (error) {
     console.error('下载图片失败:', error)
-    // 回退：使用后端代理页面下载
+    // 回退：使用页面跳转下载
     try {
-      const { getApiUrl } = await import('@/config/tenant')
-      window.location.href = getApiUrl(`/api/images/download?url=${encodeURIComponent(imageUrl.value)}&filename=${encodeURIComponent(filename)}`)
+      const { buildDownloadUrl } = await import('@/api/client')
+      window.location.href = buildDownloadUrl(imageUrl.value, filename)
     } catch (e) {
       console.error('所有下载方式都失败:', e)
     }
