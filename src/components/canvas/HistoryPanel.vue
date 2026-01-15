@@ -34,6 +34,13 @@ const historyList = shallowRef([]) // 使用 shallowRef 优化大数组
 const selectedType = ref('all') // all | image | video | audio
 const searchQuery = ref('')
 
+// 全屏模式
+const isFullscreen = ref(false)
+
+// 批量选择模式
+const isSelectMode = ref(false)
+const selectedItems = ref(new Set())
+
 // 滚动容器引用
 const scrollContainerRef = ref(null)
 
@@ -126,12 +133,16 @@ const filteredHistory = computed(() => {
 })
 
 // ========== 虚拟滚动计算 ==========
-// 计算可见项目（使用双列布局）
+// 全屏模式下的列数
+const columnCount = computed(() => isFullscreen.value ? 6 : 2)
+
+// 计算可见项目
 const visibleItems = computed(() => {
   if (!isContentReady.value) return []
   
   const items = filteredHistory.value
   const total = items.length
+  const cols = columnCount.value
   
   // 如果数据量小于 50，直接渲染全部（不需要虚拟滚动）
   if (total <= 50) {
@@ -145,9 +156,9 @@ const visibleItems = computed(() => {
   const startRow = Math.max(0, Math.floor(scrollTop.value / rowHeight) - BUFFER_COUNT)
   const endRow = Math.ceil((scrollTop.value + containerHeight.value) / rowHeight) + BUFFER_COUNT
   
-  // 转换为项目索引范围（每行2个）
-  const startIndex = startRow * 2
-  const endIndex = Math.min(total, (endRow + 1) * 2)
+  // 转换为项目索引范围
+  const startIndex = startRow * cols
+  const endIndex = Math.min(total, (endRow + 1) * cols)
   
   // 返回可见项目及其索引
   const visible = []
@@ -160,20 +171,24 @@ const visibleItems = computed(() => {
   return visible
 })
 
-// 左列可见项目
-const leftVisibleItems = computed(() => {
-  return visibleItems.value.filter(item => item.index % 2 === 0)
-})
-
-// 右列可见项目
-const rightVisibleItems = computed(() => {
-  return visibleItems.value.filter(item => item.index % 2 === 1)
+// 动态生成列数据
+const columnItems = computed(() => {
+  const cols = columnCount.value
+  const columns = Array.from({ length: cols }, () => [])
+  
+  visibleItems.value.forEach(item => {
+    const colIndex = item.index % cols
+    columns[colIndex].push(item)
+  })
+  
+  return columns
 })
 
 // 虚拟滚动的总高度（用于滚动条）
 const totalHeight = computed(() => {
   const total = filteredHistory.value.length
-  const rows = Math.ceil(total / 2)
+  const cols = columnCount.value
+  const rows = Math.ceil(total / cols)
   return rows * ITEM_HEIGHT
 })
 
@@ -182,7 +197,7 @@ const offsetY = computed(() => {
   const items = filteredHistory.value
   if (items.length <= 50) return 0
   
-  const itemsPerRow = 2
+  const cols = columnCount.value
   const startRow = Math.max(0, Math.floor(scrollTop.value / ITEM_HEIGHT) - BUFFER_COUNT)
   return startRow * ITEM_HEIGHT
 })
@@ -438,6 +453,87 @@ async function handleDownload(item) {
       console.error('[HistoryPanel] 所有下载方式都失败:', e)
     }
   }
+}
+
+// ========== 全屏模式 ==========
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+}
+
+// ========== 批量选择模式 ==========
+function toggleSelectMode() {
+  isSelectMode.value = !isSelectMode.value
+  if (!isSelectMode.value) {
+    // 退出选择模式时清空选中
+    selectedItems.value.clear()
+  }
+}
+
+// 切换选中状态
+function toggleSelectItem(item, event) {
+  if (event) {
+    event.stopPropagation()
+  }
+  const newSet = new Set(selectedItems.value)
+  if (newSet.has(item.id)) {
+    newSet.delete(item.id)
+  } else {
+    newSet.add(item.id)
+  }
+  selectedItems.value = newSet
+}
+
+// 全选/取消全选
+function toggleSelectAll() {
+  const filtered = filteredHistory.value
+  if (selectedItems.value.size === filtered.length) {
+    // 已全选，取消全选
+    selectedItems.value = new Set()
+  } else {
+    // 全选
+    selectedItems.value = new Set(filtered.map(item => item.id))
+  }
+}
+
+// 检查是否选中
+function isItemSelected(item) {
+  return selectedItems.value.has(item.id)
+}
+
+// 批量下载进度状态
+const batchDownloading = ref(false)
+const batchDownloadProgress = ref({ current: 0, total: 0 })
+
+// 批量下载
+async function handleBatchDownload() {
+  const selectedList = filteredHistory.value.filter(item => selectedItems.value.has(item.id))
+  if (selectedList.length === 0) return
+  
+  batchDownloading.value = true
+  batchDownloadProgress.value = { current: 0, total: selectedList.length }
+  
+  console.log('[HistoryPanel] 开始批量下载:', selectedList.length, '个文件')
+  
+  // 逐个下载（避免并发太高）
+  for (let i = 0; i < selectedList.length; i++) {
+    const item = selectedList[i]
+    batchDownloadProgress.value.current = i + 1
+    
+    try {
+      await handleDownload(item)
+      // 每个文件下载之间添加延迟，避免浏览器阻止
+      await new Promise(resolve => setTimeout(resolve, 500))
+    } catch (error) {
+      console.error('[HistoryPanel] 批量下载单个文件失败:', item.id, error)
+    }
+  }
+  
+  batchDownloading.value = false
+  console.log('[HistoryPanel] 批量下载完成')
+  
+  // 下载完成后退出选择模式
+  isSelectMode.value = false
+  selectedItems.value = new Set()
 }
 
 // 点击历史记录 - 打开全屏预览
@@ -979,10 +1075,15 @@ async function applyToCanvas() {
   }
 }
 
+// 视频缩略图提取失败的记录（避免重复尝试）
+const videoThumbnailFailed = ref({})
+
 // 提取视频首帧作为缩略图（带节流，限制并发）
-function extractVideoThumbnail(item) {
+function extractVideoThumbnail(item, useProxy = false) {
   if (item.type !== 'video' || !item.url) return
   if (videoThumbnails.value[item.id]) return
+  // 如果已经失败过且不是代理模式，跳过
+  if (videoThumbnailFailed.value[item.id] && !useProxy) return
   
   // 如果正在处理的数量已达上限，加入队列
   if (processingThumbnails.value >= MAX_CONCURRENT_THUMBNAILS) {
@@ -1039,13 +1140,15 @@ function extractVideoThumbnail(item) {
   }
   
   video.onerror = () => {
-    console.warn('[HistoryPanel] 视频加载失败:', item.url)
+    console.warn('[HistoryPanel] 视频缩略图提取失败:', item.url?.substring(0, 50))
+    videoThumbnailFailed.value[item.id] = true
     cleanup()
   }
   
   // 设置超时，防止卡住
   setTimeout(() => {
     if (processingThumbnails.value > 0 && !videoThumbnails.value[item.id]) {
+      videoThumbnailFailed.value[item.id] = true
       cleanup()
     }
   }, 5000)
@@ -1258,8 +1361,9 @@ onUnmounted(() => {
     <div 
       v-if="visible" 
       class="history-panel-wrapper"
+      :class="{ fullscreen: isFullscreen }"
     >
-      <div class="history-panel">
+      <div class="history-panel" :class="{ fullscreen: isFullscreen }">
         <!-- 头部 -->
         <div class="panel-header">
           <div class="header-title">
@@ -1269,11 +1373,65 @@ onUnmounted(() => {
             </svg>
             <span>{{ t('canvas.historyPanel.title') }}</span>
           </div>
-          <button class="close-btn" @click="$emit('close')">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
+          <div class="header-actions">
+            <!-- 批量选择按钮 -->
+            <button 
+              class="header-btn" 
+              :class="{ active: isSelectMode }"
+              @click="toggleSelectMode"
+              :title="isSelectMode ? '退出选择' : '批量选择'"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 11 12 14 22 4"/>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+            </button>
+            <!-- 全屏展开按钮 -->
+            <button 
+              class="header-btn" 
+              :class="{ active: isFullscreen }"
+              @click="toggleFullscreen"
+              :title="isFullscreen ? '退出全屏' : '全屏显示'"
+            >
+              <svg v-if="!isFullscreen" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+              </svg>
+            </button>
+            <!-- 关闭按钮 -->
+            <button class="close-btn" @click="$emit('close')">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        
+        <!-- 批量操作栏（选择模式下显示） -->
+        <div v-if="isSelectMode" class="batch-action-bar">
+          <div class="select-info">
+            <button class="select-all-btn" @click="toggleSelectAll">
+              {{ selectedItems.size === filteredHistory.length ? '取消全选' : '全选' }}
+            </button>
+            <span class="select-count">已选 {{ selectedItems.size }} 项</span>
+          </div>
+          <button 
+            class="batch-download-btn" 
+            :disabled="selectedItems.size === 0 || batchDownloading"
+            @click="handleBatchDownload"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
+            <span v-if="batchDownloading">
+              下载中 {{ batchDownloadProgress.current }}/{{ batchDownloadProgress.total }}
+            </span>
+            <span v-else>批量下载</span>
           </button>
         </div>
 
@@ -1335,6 +1493,7 @@ onUnmounted(() => {
             <p v-if="historyList.length === 0">{{ t('canvas.historyPanel.noHistory') }}</p>
             <p v-else>{{ t('canvas.historyPanel.noMatch') }}</p>
             <p class="empty-hint">{{ t('canvas.historyPanel.autoSaveHint') }}</p>
+            <p class="empty-hint retention">仅保留最近15天的历史记录</p>
           </div>
 
           <!-- 虚拟滚动列表 -->
@@ -1345,27 +1504,40 @@ onUnmounted(() => {
           >
             <div 
               class="waterfall-grid"
+              :class="{ 'fullscreen-grid': isFullscreen }"
               :style="{ transform: `translateY(${offsetY}px)` }"
             >
               <div 
-                v-for="(columnItems, colIndex) in [leftVisibleItems, rightVisibleItems]"
+                v-for="(colItems, colIndex) in columnItems"
                 :key="colIndex"
                 class="waterfall-column"
               >
                 <div
-                  v-for="{ item, index } in columnItems"
+                  v-for="{ item, index } in colItems"
                   :key="item.id"
                   class="history-card"
                   :class="[
                     `type-${item.type}`,
-                    { 'portrait-video': item.type === 'video' && isPortraitVideo(item) }
+                    { 'portrait-video': item.type === 'video' && isPortraitVideo(item) },
+                    { 'selected': isSelectMode && isItemSelected(item) }
                   ]"
                   draggable="true"
-                  @click="handleHistoryClick(item)"
+                  @click="isSelectMode ? toggleSelectItem(item, $event) : handleHistoryClick(item)"
                   @contextmenu="handleContextMenu($event, item)"
                   @dragstart="handleDragStart($event, item)"
                   @dragend="handleDragEnd"
                 >
+                  <!-- 批量选择复选框 -->
+                  <div 
+                    v-if="isSelectMode" 
+                    class="select-checkbox"
+                    :class="{ checked: isItemSelected(item) }"
+                    @click.stop="toggleSelectItem(item, $event)"
+                  >
+                    <svg v-if="isItemSelected(item)" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  </div>
                   <!-- 图片预览 -->
                   <template v-if="item.type === 'image'">
                     <img 
@@ -1386,6 +1558,7 @@ onUnmounted(() => {
                   
                   <!-- 视频预览 -->
                   <template v-else-if="item.type === 'video'">
+                    <!-- 优先使用缩略图 -->
                     <img 
                       v-if="getVideoThumbnail(item)" 
                       :src="getVideoThumbnail(item)" 
@@ -1393,6 +1566,15 @@ onUnmounted(() => {
                       class="card-image"
                       loading="lazy"
                       decoding="async"
+                    />
+                    <!-- 备用：直接使用 video 元素显示首帧 -->
+                    <video 
+                      v-else-if="item.url"
+                      :src="item.url"
+                      class="card-image card-video-preview"
+                      muted
+                      preload="metadata"
+                      @loadeddata="$event.target.currentTime = 0.1"
                     />
                     <div v-else class="card-placeholder video">
                       <span class="placeholder-icon">▶</span>
@@ -1449,7 +1631,14 @@ onUnmounted(() => {
         <!-- 底部统计 -->
         <div class="panel-footer">
           <span class="stats">{{ historyStats.all }} {{ t('canvas.historyPanel.items') }}</span>
-          <span class="tip">{{ t('canvas.historyPanel.footerTip') }}</span>
+          <span class="retention-tip">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            仅保留最近15天
+          </span>
         </div>
       </div>
     </div>
@@ -1674,6 +1863,20 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
+/* 全屏模式 */
+.history-panel-wrapper.fullscreen {
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
 /* 面板 */
 .history-panel {
   width: 480px;
@@ -1689,6 +1892,14 @@ onUnmounted(() => {
     0 24px 80px rgba(0, 0, 0, 0.5),
     0 0 0 1px rgba(255, 255, 255, 0.05) inset;
   pointer-events: auto;
+}
+
+/* 全屏模式下的面板 */
+.history-panel.fullscreen {
+  width: 90vw;
+  max-width: 1400px;
+  height: calc(100vh - 40px);
+  max-height: none;
 }
 
 /* 头部 */
@@ -1713,6 +1924,98 @@ onUnmounted(() => {
 .header-title svg {
   opacity: 0.6;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* 头部按钮组 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.header-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.header-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
+/* 批量操作栏 */
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(59, 130, 246, 0.1);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.select-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.select-all-btn {
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.select-all-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.select-count {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.batch-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.batch-download-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.batch-download-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .close-btn {
@@ -1884,6 +2187,17 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+/* 全屏模式下的瀑布流 - 6列 */
+.fullscreen-grid {
+  gap: 12px;
+  padding: 0 20px;
+}
+
+.fullscreen-grid .waterfall-column {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 骨架屏样式 */
 .skeleton-loading {
   padding: 0 12px;
@@ -1965,6 +2279,11 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.3) !important;
 }
 
+.empty-hint.retention {
+  color: rgba(255, 180, 100, 0.5) !important;
+  margin-top: 4px;
+}
+
 /* 历史记录卡片 */
 .history-card {
   position: relative;
@@ -1990,6 +2309,52 @@ onUnmounted(() => {
   opacity: 1;
 }
 
+/* 选中状态 */
+.history-card.selected {
+  box-shadow: 0 0 0 3px #3b82f6, 0 4px 12px rgba(59, 130, 246, 0.3);
+  transform: scale(1.02);
+}
+
+.history-card.selected::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(59, 130, 246, 0.15);
+  pointer-events: none;
+}
+
+/* 复选框 */
+.select-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  z-index: 20;
+}
+
+.select-checkbox:hover {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.select-checkbox.checked {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.select-checkbox.checked svg {
+  color: #fff;
+}
+
 /* 卡片图片 */
 .card-image {
   width: 100%;
@@ -1997,6 +2362,12 @@ onUnmounted(() => {
   max-height: 480px; 
   display: block;
   object-fit: cover;
+}
+
+/* 视频预览元素样式 */
+.card-video-preview {
+  pointer-events: none; /* 禁止视频交互 */
+  background: #1a1a1c;
 }
 
 /* 竖屏视频特殊样式 */
@@ -2191,6 +2562,14 @@ onUnmounted(() => {
 .stats {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.retention-tip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: rgba(255, 180, 100, 0.7);
 }
 
 .tip {

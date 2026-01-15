@@ -7,6 +7,7 @@
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as THREE from 'three'
+import { getTenantHeaders } from '@/config/tenant'
 
 const props = defineProps({
   // 源图片URL
@@ -477,35 +478,119 @@ function handleApply() {
   })
 }
 
+/**
+ * 上传图片到七牛云（将blob/data URL转换为公网可访问的URL）
+ * @param {string} imageUrl - blob URL 或 data URL
+ * @returns {Promise<string>} 七牛云公网URL
+ */
+async function uploadImageToQiniu(imageUrl) {
+  const token = localStorage.getItem('token')
+  if (!token) {
+    throw new Error('请先登录')
+  }
+
+  let blob
+
+  // 处理 blob URL
+  if (imageUrl.startsWith('blob:')) {
+    const response = await fetch(imageUrl)
+    if (!response.ok) throw new Error('无法读取图片')
+    blob = await response.blob()
+  }
+  // 处理 data URL (base64)
+  else if (imageUrl.startsWith('data:')) {
+    const base64Match = imageUrl.match(/^data:(.+?);base64,(.+)$/)
+    if (!base64Match) throw new Error('无效的图片格式')
+
+    const mimeType = base64Match[1]
+    const base64Data = base64Match[2]
+    const binaryData = atob(base64Data)
+    const uint8Array = new Uint8Array(binaryData.length)
+    for (let i = 0; i < binaryData.length; i++) {
+      uint8Array[i] = binaryData.charCodeAt(i)
+    }
+    blob = new Blob([uint8Array], { type: mimeType })
+  }
+  else {
+    throw new Error('不支持的图片URL格式')
+  }
+
+  // 构造 FormData 上传
+  const formData = new FormData()
+  formData.append('image', blob, 'camera3d-source.jpg')
+
+  const uploadResponse = await fetch('/api/canvas/upload-temp-image', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      ...getTenantHeaders()
+    },
+    body: formData
+  })
+
+  if (!uploadResponse.ok) {
+    const errorData = await uploadResponse.json()
+    throw new Error(errorData.message || '图片上传失败')
+  }
+
+  const uploadResult = await uploadResponse.json()
+  if (!uploadResult.url) {
+    throw new Error('未获取到图片URL')
+  }
+
+  return uploadResult.url
+}
+
 // 生成多角度图片
 async function handleGenerate() {
   if (generating.value) return
-  
+
   if (!props.imageUrl) {
     generateError.value = '请先选择一张图片'
     return
   }
-  
+
   generating.value = true
-  generateProgress.value = '提交任务中...'
+  generateProgress.value = '准备中...'
   generateError.value = ''
-  
+
   try {
     // 获取 token
     const token = localStorage.getItem('token')
     if (!token) {
       throw new Error('请先登录')
     }
-    
+
+    // 图片URL预处理：blob/data URL需要先上传到七牛云
+    let finalImageUrl = props.imageUrl
+
+    if (props.imageUrl.startsWith('blob:') || props.imageUrl.startsWith('data:')) {
+      generateProgress.value = '上传图片到云端...'
+      console.log('[Camera3D] 检测到本地图片，上传到七牛云...')
+
+      try {
+        finalImageUrl = await uploadImageToQiniu(props.imageUrl)
+        console.log('[Camera3D] 图片上传成功:', finalImageUrl)
+      } catch (uploadError) {
+        console.error('[Camera3D] 图片上传失败:', uploadError)
+        throw new Error(`图片上传失败: ${uploadError.message}`)
+      }
+    } else {
+      console.log('[Camera3D] 使用现有公网URL:', props.imageUrl.substring(0, 60))
+    }
+
+    generateProgress.value = '提交任务中...'
+
     // 提交多角度生成任务
     const response = await fetch('/api/images/multiangle', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...getTenantHeaders()
       },
       body: JSON.stringify({
-        imageUrl: props.imageUrl,
+        imageUrl: finalImageUrl,
         prompt: outputPrompt.value
       })
     })

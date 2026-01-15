@@ -23,15 +23,32 @@ const MAX_TOTAL_STORAGE_SIZE = 3 * 1024 * 1024  // 总存储最大 3MB
 let autoSaveTimer = null
 
 /**
- * 🔧 清理节点中的大数据（base64图片等），只保留结构和URL引用
+ * 🔧 清理节点中的大数据（base64图片、blob URL等），只保留结构和有效URL引用
  * 这样可以大幅减少存储空间，避免 localStorage 溢出
+ * 
+ * 清理规则：
+ * - base64 数据：移除，只保留类型标记
+ * - blob URL：移除（localStorage 恢复后无效）
+ * - 超大字符串：截断
  */
 function cleanNodeData(nodes) {
   if (!Array.isArray(nodes)) return nodes
   
   return nodes.map(node => {
     // 深拷贝节点
-    const cleanedNode = JSON.parse(JSON.stringify(node))
+    let cleanedNode
+    try {
+      cleanedNode = JSON.parse(JSON.stringify(node))
+    } catch (e) {
+      // 如果 JSON 序列化失败（可能有循环引用），跳过这个节点
+      console.warn('[WorkflowAutoSave] 节点序列化失败，跳过:', node.id, e.message)
+      return {
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: { title: node.data?.title || 'Error Node', _serializeError: true }
+      }
+    }
     
     if (cleanedNode.data) {
       // 清理常见的大数据字段（base64图片）
@@ -42,6 +59,9 @@ function cleanNodeData(nodes) {
           if (cleanedNode.data[field].startsWith('data:')) {
             const mimeMatch = cleanedNode.data[field].match(/^data:([^;,]+)/)
             cleanedNode.data[field] = mimeMatch ? `[BASE64:${mimeMatch[1]}]` : '[BASE64_REMOVED]'
+          } else if (cleanedNode.data[field].startsWith('blob:')) {
+            // 🔧 清理 blob URL（localStorage 恢复后无效）
+            cleanedNode.data[field] = '[BLOB_URL_REMOVED]'
           } else if (cleanedNode.data[field].length > 10000) {
             // 超过 10KB 的字符串数据也清理
             cleanedNode.data[field] = '[LARGE_DATA_REMOVED]'
@@ -49,45 +69,86 @@ function cleanNodeData(nodes) {
         }
       })
       
-      // 清理 images 数组中的 base64 数据
+      // 清理 images 数组中的 base64 数据和 blob URL
       if (Array.isArray(cleanedNode.data.images)) {
         cleanedNode.data.images = cleanedNode.data.images.map(img => {
           const cleanedImg = { ...img }
-          // 保留 URL，移除 base64
+          // 保留有效 URL，移除 base64 和 blob
           if (cleanedImg.base64) delete cleanedImg.base64
-          if (cleanedImg.data && typeof cleanedImg.data === 'string' && cleanedImg.data.startsWith('data:')) {
-            delete cleanedImg.data
+          if (cleanedImg.data && typeof cleanedImg.data === 'string') {
+            if (cleanedImg.data.startsWith('data:') || cleanedImg.data.startsWith('blob:')) {
+              delete cleanedImg.data
+            }
           }
-          if (cleanedImg.thumbnail && typeof cleanedImg.thumbnail === 'string' && cleanedImg.thumbnail.startsWith('data:')) {
-            delete cleanedImg.thumbnail
+          if (cleanedImg.thumbnail && typeof cleanedImg.thumbnail === 'string') {
+            if (cleanedImg.thumbnail.startsWith('data:') || cleanedImg.thumbnail.startsWith('blob:')) {
+              delete cleanedImg.thumbnail
+            }
+          }
+          // 清理 url 字段中的 blob URL
+          if (cleanedImg.url && cleanedImg.url.startsWith('blob:')) {
+            delete cleanedImg.url
           }
           return cleanedImg
+        }).filter(img => img.url || img.src) // 移除没有有效 URL 的图片
+      }
+      
+      // 🔧 清理 sourceImages 数组中的 blob URL
+      if (Array.isArray(cleanedNode.data.sourceImages)) {
+        cleanedNode.data.sourceImages = cleanedNode.data.sourceImages.filter(url => {
+          if (typeof url === 'string') {
+            return !url.startsWith('blob:') && !url.startsWith('data:')
+          }
+          return true
         })
       }
       
-      // 清理 imageUrl/videoUrl 等字段中的 base64（保留 http URL）
+      // 清理 imageUrl/videoUrl 等字段中的 base64 和 blob URL（保留 http URL）
       const urlFields = ['imageUrl', 'videoUrl', 'url', 'image', 'video', 'audioUrl', 'src']
       urlFields.forEach(field => {
         if (cleanedNode.data[field] && typeof cleanedNode.data[field] === 'string') {
           if (cleanedNode.data[field].startsWith('data:')) {
             const mimeMatch = cleanedNode.data[field].match(/^data:([^;,]+)/)
             cleanedNode.data[field] = mimeMatch ? `[BASE64:${mimeMatch[1]}]` : '[BASE64_REMOVED]'
+          } else if (cleanedNode.data[field].startsWith('blob:')) {
+            cleanedNode.data[field] = '[BLOB_URL_REMOVED]'
           }
         }
       })
       
       // 清理 result/output 等可能包含大数据的字段
-      const resultFields = ['result', 'output', 'response', 'content']
+      const resultFields = ['result', 'response', 'content']
       resultFields.forEach(field => {
         if (cleanedNode.data[field] && typeof cleanedNode.data[field] === 'string') {
           if (cleanedNode.data[field].startsWith('data:')) {
             cleanedNode.data[field] = '[BASE64_REMOVED]'
+          } else if (cleanedNode.data[field].startsWith('blob:')) {
+            cleanedNode.data[field] = '[BLOB_URL_REMOVED]'
           } else if (cleanedNode.data[field].length > 50000) {
             // 超过 50KB 的文本内容截断
             cleanedNode.data[field] = cleanedNode.data[field].substring(0, 1000) + '...[TRUNCATED]'
           }
         }
       })
+      
+      // 🔧 特殊处理 output 对象（可能包含 urls 数组）
+      if (cleanedNode.data.output && typeof cleanedNode.data.output === 'object') {
+        // 清理 output.url
+        if (cleanedNode.data.output.url) {
+          if (cleanedNode.data.output.url.startsWith('blob:') || cleanedNode.data.output.url.startsWith('data:')) {
+            cleanedNode.data.output.url = null
+          }
+        }
+        // 清理 output.urls 数组
+        if (Array.isArray(cleanedNode.data.output.urls)) {
+          cleanedNode.data.output.urls = cleanedNode.data.output.urls.filter(url => {
+            if (typeof url === 'string') {
+              return !url.startsWith('blob:') && !url.startsWith('data:')
+            }
+            return true
+          })
+        }
+      }
     }
     
     return cleanedNode

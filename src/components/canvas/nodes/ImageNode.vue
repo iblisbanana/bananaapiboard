@@ -90,6 +90,43 @@ const dragOverIndex = ref(-1)
 const showImageEditor = ref(false)
 const editorInitialTool = ref('')
 
+// 🔧 Blob URL 内存管理 - 跟踪所有创建的 blob URL，用于组件卸载时清理
+const createdBlobUrls = ref([])
+
+// 创建并跟踪 blob URL
+function createTrackedBlobUrl(blob) {
+  const url = URL.createObjectURL(blob)
+  createdBlobUrls.value.push(url)
+  return url
+}
+
+// 释放并从跟踪列表中移除 blob URL
+function revokeTrackedBlobUrl(url) {
+  if (!url || !url.startsWith('blob:')) return
+  try {
+    URL.revokeObjectURL(url)
+    const index = createdBlobUrls.value.indexOf(url)
+    if (index > -1) {
+      createdBlobUrls.value.splice(index, 1)
+    }
+  } catch (e) {
+    console.warn('[ImageNode] 释放 blob URL 失败:', e)
+  }
+}
+
+// 清理所有跟踪的 blob URL
+function cleanupAllBlobUrls() {
+  console.log('[ImageNode] 清理所有 blob URL，数量:', createdBlobUrls.value.length)
+  createdBlobUrls.value.forEach(url => {
+    try {
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      // 忽略错误
+    }
+  })
+  createdBlobUrls.value = []
+}
+
 // 生成参数 - 默认使用模型列表第一个
 const getDefaultModel = () => {
   const availableModels = getAvailableImageModels()
@@ -842,6 +879,8 @@ async function startCutoutWithBg(bgType) {
 async function compositeWithBackground(blob, bgColor) {
   return new Promise((resolve, reject) => {
     const img = new Image()
+    const blobUrl = URL.createObjectURL(blob)
+    
     img.onload = () => {
       const canvas = document.createElement('canvas')
       canvas.width = img.width
@@ -855,10 +894,17 @@ async function compositeWithBackground(blob, bgColor) {
       // 绘制抠图结果
       ctx.drawImage(img, 0, 0)
       
+      // 🔧 释放临时 blob URL
+      URL.revokeObjectURL(blobUrl)
+      
       resolve(canvas.toDataURL('image/png'))
     }
-    img.onerror = reject
-    img.src = URL.createObjectURL(blob)
+    img.onerror = (err) => {
+      // 🔧 出错时也要释放
+      URL.revokeObjectURL(blobUrl)
+      reject(err)
+    }
+    img.src = blobUrl
   })
 }
 
@@ -2040,7 +2086,7 @@ async function handleFileUpload(event) {
   
   try {
     // 🚀 优化：立即使用 blob URL 显示图片（秒加载）
-    const blobUrl = URL.createObjectURL(file)
+    const blobUrl = createTrackedBlobUrl(file)
     console.log('[ImageNode] 秒加载 - 使用 blob URL 预览:', blobUrl)
     
     // 立即执行流程，使用 blob URL 显示
@@ -2103,13 +2149,13 @@ async function uploadImageFileAsync(file, blobUrl, nodeId) {
         }
       }
       
-      // 释放 blob URL 内存
-      URL.revokeObjectURL(blobUrl)
+      // 释放 blob URL 内存（从跟踪列表中移除）
+      revokeTrackedBlobUrl(blobUrl)
     }
   } catch (error) {
     console.warn('[ImageNode] 后台上传失败，保持使用 blob URL:', error.message)
     // 上传失败时不影响用户体验，保持 blob URL 可用
-    // 在提交任务时，后端会处理 blob URL 转换
+    // 注意：blob URL 仍在跟踪列表中，会在组件卸载时清理
   }
 }
 
@@ -2339,7 +2385,7 @@ async function updateSourceImage(event) {
   
   try {
     // 🚀 立即使用 blob URL 显示（秒加载）
-    const blobUrl = URL.createObjectURL(file)
+    const blobUrl = createTrackedBlobUrl(file)
     console.log('[ImageNode] 更新图片 - 秒加载 blob URL:', blobUrl)
     
     canvasStore.updateNodeData(props.id, {
@@ -3271,6 +3317,9 @@ onUnmounted(() => {
   if (isAutoScrolling.value) {
     document.body.style.cursor = ''
   }
+  
+  // 🔧 清理所有跟踪的 blob URL，防止内存泄漏
+  cleanupAllBlobUrls()
 })
 
 // 开始调整尺寸

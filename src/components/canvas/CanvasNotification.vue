@@ -217,11 +217,6 @@ onUnmounted(() => {
             </button>
           </div>
           <div class="header-actions">
-            <button class="action-btn" title="下载" @click.stop>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-            </button>
             <button class="action-btn close-btn" @click="closePopup">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -580,10 +575,7 @@ onUnmounted(() => {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.5);
   line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  word-break: break-word;
 }
 
 /* 亮色主题弹窗 */

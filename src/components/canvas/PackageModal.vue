@@ -563,7 +563,7 @@ watch(() => props.visible, (newVal) => {
                   <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
-                  <span>赠送积分: {{ pkg.points }}元</span>
+                  <span>到账积分: {{ pkg.points }}积分（过期清零）</span>
                 </div>
                 <div class="feature-item">
                   <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -698,8 +698,8 @@ watch(() => props.visible, (newVal) => {
                       </svg>
                     </div>
                     <div class="benefit-info">
-                      <div class="benefit-value">{{ selectedPackage.points }}元</div>
-                      <div class="benefit-label">赠送积分</div>
+                      <div class="benefit-value">{{ selectedPackage.points }}积分</div>
+                      <div class="benefit-label">到账积分（过期清零）</div>
                     </div>
                   </div>
                   <div class="benefit-item">

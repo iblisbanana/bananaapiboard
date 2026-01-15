@@ -646,47 +646,76 @@ function handleWorkflowSaved(workflow) {
 async function autoSaveWorkflow() {
   const currentTab = canvasStore.getCurrentTab()
   
-  // 只有已保存过的工作流（有workflowId）才自动保存
-  if (!currentTab || !currentTab.workflowId) {
+  // 检查是否有内容需要保存
+  if (!currentTab) {
     return
   }
   
-  // 如果没有变更，跳过
-  if (!currentTab.hasChanges) {
+  const workflowData = canvasStore.exportWorkflow()
+  
+  // 如果画布为空，不需要保存
+  if (!workflowData.nodes || workflowData.nodes.length === 0) {
+    return
+  }
+  
+  // 如果是已保存的工作流且没有变更，跳过
+  if (currentTab.workflowId && !currentTab.hasChanges) {
     return
   }
   
   try {
     const { saveWorkflow } = await import('@/api/canvas/workflow')
-    const workflowData = canvasStore.exportWorkflow()
     
-    // 🔧 预检：计算数据大小，如果过大则跳过自动保存并提示用户手动保存
+    // 🔧 预检：计算数据大小，如果过大则跳过自动保存
     const nodesJson = JSON.stringify(workflowData.nodes || [])
     const edgesJson = JSON.stringify(workflowData.edges || [])
     const dataSize = new Blob([nodesJson, edgesJson]).size
-    const MAX_AUTO_SAVE_SIZE = 30 * 1024 * 1024 // 30MB（自动保存限制比手动保存更严格）
+    const MAX_AUTO_SAVE_SIZE = 30 * 1024 * 1024 // 30MB
     
     if (dataSize > MAX_AUTO_SAVE_SIZE) {
       console.warn(`[Canvas] 自动保存跳过：数据过大 (${(dataSize / 1024 / 1024).toFixed(1)}MB)，请手动保存`)
       return
     }
     
-    // 自动保存时，设置 uploadToCloud=false，不上传云存储，只保存到数据库
-    await saveWorkflow({
-      id: currentTab.workflowId,
-      name: currentTab.name,
-      uploadToCloud: false, // 自动保存不上传云存储
-      ...workflowData
-    })
-    
-    canvasStore.markCurrentTabSaved()
-    lastAutoSave.value = new Date()
-    console.log('[Canvas] 自动保存成功:', currentTab.name)
+    // 🔧 新建工作流也支持自动保存（作为草稿）
+    if (currentTab.workflowId) {
+      // 已保存的工作流：更新保存
+      await saveWorkflow({
+        id: currentTab.workflowId,
+        name: currentTab.name,
+        uploadToCloud: false,
+        ...workflowData
+      })
+      canvasStore.markCurrentTabSaved()
+      lastAutoSave.value = new Date()
+      console.log('[Canvas] 自动保存成功（更新）:', currentTab.name)
+    } else {
+      // 🔧 新建工作流：创建草稿保存
+      // 只有节点数量 >= 2 时才自动创建草稿（避免误触发）
+      if (workflowData.nodes.length >= 2) {
+        const result = await saveWorkflow({
+          name: currentTab.name || `草稿_${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
+          uploadToCloud: false,
+          isDraft: true, // 标记为草稿
+          ...workflowData
+        })
+        
+        // 更新标签信息
+        if (result?.workflow?.id) {
+          canvasStore.markCurrentTabSaved(result.workflow.id)
+          canvasStore.updateCurrentTabName(result.workflow.name)
+          lastAutoSave.value = new Date()
+          console.log('[Canvas] 自动保存成功（新建草稿）:', result.workflow.name)
+          
+          // 显示保存成功提示
+          displayToast('工作流已自动保存', 'success', 2000)
+        }
+      }
+    }
   } catch (error) {
-    // 🔧 自动保存失败时，只记录日志不打断用户
-    // 如果是数据过大的错误，提示用户手动保存
+    // 自动保存失败时，只记录日志不打断用户
     if (error.message?.includes('过大') || error.message?.includes('too large')) {
-      console.warn('[Canvas] 自动保存失败：数据过大，请手动保存并清理不需要的节点')
+      console.warn('[Canvas] 自动保存失败：数据过大，请手动保存')
     } else {
       console.error('[Canvas] 自动保存失败:', error.message || error)
     }
@@ -840,12 +869,75 @@ function updateNodeFromTask(task) {
   }
 }
 
-// 页面关闭前保存当前工作流到历史
-function handleBeforeUnload() {
+// 页面关闭前保存当前工作流
+function handleBeforeUnload(event) {
   const workflowData = getCurrentWorkflowData()
-  if (workflowData && workflowData.nodes && workflowData.nodes.length > 0) {
-    saveToHistory(workflowData)
-    console.log('[Canvas] 页面关闭前保存工作流到历史')
+  if (!workflowData || !workflowData.nodes || workflowData.nodes.length === 0) {
+    return
+  }
+  
+  // 1. 始终保存到 localStorage 历史（作为备份）
+  saveToHistory(workflowData)
+  console.log('[Canvas] 页面关闭前保存工作流到历史')
+  
+  // 2. 🔧 尝试使用 sendBeacon 保存到服务器（不阻塞页面关闭）
+  const currentTab = canvasStore.getCurrentTab()
+  if (currentTab?.hasChanges) {
+    try {
+      // 清理 blob URL 和 base64 数据，减小请求体积
+      const cleanedNodes = workflowData.nodes.map(node => {
+        const cleanedNode = { ...node, data: { ...node.data } }
+        // 移除 blob URL 和 base64 数据
+        if (cleanedNode.data.sourceImages) {
+          cleanedNode.data.sourceImages = cleanedNode.data.sourceImages.filter(
+            url => url && !url.startsWith('blob:') && !url.startsWith('data:')
+          )
+        }
+        if (cleanedNode.data.output?.urls) {
+          cleanedNode.data.output.urls = cleanedNode.data.output.urls.filter(
+            url => url && !url.startsWith('blob:') && !url.startsWith('data:')
+          )
+        }
+        return cleanedNode
+      })
+      
+      const saveData = {
+        id: currentTab.workflowId || null,
+        name: currentTab.name || '未保存的工作流',
+        nodes: cleanedNodes,
+        edges: workflowData.edges,
+        viewport: workflowData.viewport,
+        uploadToCloud: false,
+        isBeforeUnload: true // 标记为关闭前保存
+      }
+      
+      // 使用 sendBeacon 异步发送（不阻塞页面关闭）
+      const headers = getTenantHeaders()
+      const token = localStorage.getItem('token')
+      const blob = new Blob([JSON.stringify({
+        ...saveData,
+        _headers: {
+          ...headers,
+          Authorization: token ? `Bearer ${token}` : undefined
+        }
+      })], { type: 'application/json' })
+      
+      // sendBeacon 有大小限制（通常 64KB），如果数据太大就跳过
+      if (blob.size < 64 * 1024) {
+        const beaconUrl = '/api/canvas/workflows/beacon-save'
+        navigator.sendBeacon(beaconUrl, blob)
+        console.log('[Canvas] 已发送 sendBeacon 保存请求')
+      } else {
+        console.log('[Canvas] 数据过大，跳过 sendBeacon 保存')
+      }
+    } catch (e) {
+      console.warn('[Canvas] sendBeacon 保存失败:', e)
+    }
+    
+    // 3. 如果有未保存的更改，显示提示
+    event.preventDefault()
+    event.returnValue = '您有未保存的更改，确定要离开吗？'
+    return event.returnValue
   }
 }
 
