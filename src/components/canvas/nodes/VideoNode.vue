@@ -56,6 +56,9 @@ const frameInputRef = ref(null)
 const dragSortIndex = ref(-1)
 const dragOverIndex = ref(-1)
 
+// 🚀 性能优化：画布拖拽状态（用于暂停视频播放）
+const isCanvasDragging = ref(false)
+
 // 生成模式：image（图生视频）, text（纯文本）
 const generationMode = ref(props.data.generationMode || 'text')
 
@@ -533,6 +536,19 @@ function checkAndRestoreBackgroundTasks() {
 }
 
 // 初始化时确保时长选项有效
+// 🚀 性能优化：监听画布拖拽事件
+function handleCanvasDragStart() {
+  isCanvasDragging.value = true
+  // 暂停视频播放以提升拖拽性能
+  const video = videoPlayerRef.value
+  if (video && !video.paused) {
+    video.pause()
+  }
+}
+function handleCanvasDragEnd() {
+  isCanvasDragging.value = false
+}
+
 onMounted(() => {
   // 如果当前模型支持时长选择，但当前选中的时长不在可用列表中，则重置为第一个可用时长
   if (availableDurations.value.length > 0 && !availableDurations.value.includes(selectedDuration.value)) {
@@ -546,6 +562,10 @@ onMounted(() => {
   window.addEventListener('background-task-complete', handleBackgroundTaskComplete)
   window.addEventListener('background-task-failed', handleBackgroundTaskFailed)
   window.addEventListener('background-task-progress', handleBackgroundTaskProgress)
+  
+  // 🚀 性能优化：监听画布拖拽事件
+  window.addEventListener('canvas-drag-start', handleCanvasDragStart)
+  window.addEventListener('canvas-drag-end', handleCanvasDragEnd)
   
   // 检查是否有已完成的后台任务需要恢复
   checkAndRestoreBackgroundTasks()
@@ -563,6 +583,10 @@ onUnmounted(() => {
   window.removeEventListener('background-task-complete', handleBackgroundTaskComplete)
   window.removeEventListener('background-task-failed', handleBackgroundTaskFailed)
   window.removeEventListener('background-task-progress', handleBackgroundTaskProgress)
+  
+  // 🚀 性能优化：移除画布拖拽事件监听
+  window.removeEventListener('canvas-drag-start', handleCanvasDragStart)
+  window.removeEventListener('canvas-drag-end', handleCanvasDragEnd)
 })
 
 // 节点尺寸 - 视频节点使用16:9比例
@@ -2505,6 +2529,9 @@ async function handleVideoError(event) {
 
 // 鼠标进入视频区域 - 自动播放（带声音）
 function handleVideoMouseEnter() {
+  // 🚀 性能优化：拖拽时不自动播放视频
+  if (isCanvasDragging.value) return
+  
   const video = videoPlayerRef.value
   if (video && video.paused) {
     video.muted = false // 悬停播放时取消静音，播放声音

@@ -90,6 +90,9 @@ const dragOverIndex = ref(-1)
 const showImageEditor = ref(false)
 const editorInitialTool = ref('')
 
+// 🚀 性能优化：画布拖拽状态（用于降低渲染质量）
+const isCanvasDragging = ref(false)
+
 // 🔧 Blob URL 内存管理 - 跟踪所有创建的 blob URL，用于组件卸载时清理
 const createdBlobUrls = ref([])
 
@@ -447,6 +450,14 @@ function handlePresetSelect(preset) {
 }
 
 // 组件挂载时添加全局点击事件监听
+// 🚀 性能优化：监听画布拖拽事件
+function handleCanvasDragStart() {
+  isCanvasDragging.value = true
+}
+function handleCanvasDragEnd() {
+  isCanvasDragging.value = false
+}
+
 onMounted(() => {
   document.addEventListener('click', handleModelDropdownClickOutside)
   document.addEventListener('click', handleClickOutside)
@@ -456,12 +467,18 @@ onMounted(() => {
   nextTick(() => {
     autoResizeTextarea()
   })
+  // 🚀 性能优化：监听画布拖拽事件
+  window.addEventListener('canvas-drag-start', handleCanvasDragStart)
+  window.addEventListener('canvas-drag-end', handleCanvasDragEnd)
 })
 
 // 组件卸载时移除监听
 onUnmounted(() => {
   document.removeEventListener('click', handleModelDropdownClickOutside)
   document.removeEventListener('click', handleClickOutside)
+  // 🚀 性能优化：移除画布拖拽事件监听
+  window.removeEventListener('canvas-drag-start', handleCanvasDragStart)
+  window.removeEventListener('canvas-drag-end', handleCanvasDragEnd)
 })
 
 // 检查是否有图片输入（用于判断文生图/图生图模式）
@@ -4236,8 +4253,8 @@ async function handleDrop(event) {
           </div>
           
           <!-- 图片预览 -->
-          <div class="source-image-preview">
-            <img :src="sourceImages[0]" alt="上传的图片" />
+          <div class="source-image-preview" :class="{ 'low-quality': isCanvasDragging }">
+            <img :src="sourceImages[0]" alt="上传的图片" :loading="isCanvasDragging ? 'lazy' : 'eager'" />
           </div>
         </template>
         
@@ -4263,7 +4280,8 @@ async function handleDrop(event) {
               class="preview-images"
               :class="{ 
                 'single-image': outputImages.length === 1,
-                'transparent-bg': props.data?.isTransparent || props.data?.cutoutResult
+                'transparent-bg': props.data?.isTransparent || props.data?.cutoutResult,
+                'low-quality': isCanvasDragging
               }"
             >
               <img 
@@ -4273,6 +4291,7 @@ async function handleDrop(event) {
                 :alt="`生成结果 ${index + 1}`"
                 class="preview-image"
                 :class="{ 'transparent-image': props.data?.isTransparent || props.data?.cutoutResult }"
+                :loading="isCanvasDragging ? 'lazy' : 'eager'"
               />
             </div>
             
@@ -6798,6 +6817,26 @@ async function handleDrop(event) {
 
 :root.canvas-theme-light .image-node .preset-dropdown-item.preset-action .preset-item-label {
   color: #8b5cf6;
+}
+
+/* 🚀 性能优化：拖拽时降低图片渲染质量 */
+.source-image-preview.low-quality,
+.preview-images.low-quality {
+  /* 使用 CSS 优化渲染性能 */
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+.source-image-preview.low-quality img,
+.preview-images.low-quality img {
+  /* 降低图片渲染质量 */
+  image-rendering: pixelated;
+  /* 禁用图片平滑处理 */
+  -webkit-filter: blur(0);
+  filter: blur(0);
+  /* 使用更低的合成模式 */
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 </style>

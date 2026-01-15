@@ -119,6 +119,12 @@ const alignmentGuides = ref({
 })
 const snapPosition = ref({ x: null, y: null }) // 对齐吸附位置
 
+// 🚀 性能优化：拖拽状态管理
+const isDraggingNode = ref(false)  // 是否正在拖拽节点
+const alignmentThrottleTimer = ref(null)  // 对齐辅助线计算节流定时器
+const lastAlignmentCalcTime = ref(0)  // 上次对齐计算时间
+const ALIGNMENT_THROTTLE_MS = 50  // 对齐计算最小间隔（毫秒）
+
 // Vue Flow 实例
 const { 
   onConnect, 
@@ -348,6 +354,9 @@ onConnect((connection) => {
 onNodeDragStop((event) => {
   const node = event.node
   
+  // 🚀 性能优化：标记拖拽结束
+  isDraggingNode.value = false
+  
   // 保存对齐位置的值（在清除之前）
   const snapX = snapPosition.value.x
   const snapY = snapPosition.value.y
@@ -357,6 +366,12 @@ onNodeDragStop((event) => {
   // 清除对齐辅助线
   alignmentGuides.value = { vertical: null, horizontal: null }
   snapPosition.value = { x: null, y: null }
+  
+  // 清除节流定时器
+  if (alignmentThrottleTimer.value) {
+    cancelAnimationFrame(alignmentThrottleTimer.value)
+    alignmentThrottleTimer.value = null
+  }
   
   // 计算最终位置
   const finalPosition = {
@@ -376,12 +391,22 @@ onNodeDragStop((event) => {
   if (node.type !== 'group' && node.data?.groupId) {
     adjustGroupSizeForNode(node)
   }
+  
+  // 🚀 性能优化：通知节点恢复正常渲染质量
+  window.dispatchEvent(new CustomEvent('canvas-drag-end'))
 })
 
 
 // 处理节点拖拽中（实时同步）
 onNodeDrag((event) => {
   const node = event.node
+  
+  // 🚀 性能优化：标记拖拽开始，首次拖拽时触发
+  if (!isDraggingNode.value) {
+    isDraggingNode.value = true
+    // 通知节点降低渲染质量
+    window.dispatchEvent(new CustomEvent('canvas-drag-start'))
+  }
   
   // 如果拖拽的是编组节点，实时同步组内节点位置
   if (node.type === 'group' && node.data?.nodeIds && node.data?.nodeOffsets) {
@@ -393,13 +418,40 @@ onNodeDrag((event) => {
     adjustGroupSizeForNode(node)
   }
   
-  // 计算对齐辅助线
-  calculateAlignmentGuides(node)
+  // 🚀 性能优化：对齐辅助线计算节流
+  // 当节点数量较多时（>10），使用 requestAnimationFrame 节流
+  const nodeCount = canvasStore.nodes.length
+  const now = performance.now()
+  
+  if (nodeCount > 10) {
+    // 节点多时，使用节流避免每帧都计算
+    if (now - lastAlignmentCalcTime.value < ALIGNMENT_THROTTLE_MS) {
+      return // 跳过这次计算
+    }
+    lastAlignmentCalcTime.value = now
+  }
+  
+  // 使用 requestAnimationFrame 确保不阻塞渲染
+  if (alignmentThrottleTimer.value) {
+    cancelAnimationFrame(alignmentThrottleTimer.value)
+  }
+  alignmentThrottleTimer.value = requestAnimationFrame(() => {
+    calculateAlignmentGuides(node)
+  })
 })
 
 // 计算对齐辅助线
 function calculateAlignmentGuides(draggedNode) {
   const SNAP_THRESHOLD = 10 // 对齐阈值（像素）
+  
+  // 🚀 性能优化：节点数量过多时禁用对齐辅助线
+  const totalNodes = canvasStore.nodes.length
+  if (totalNodes > 50) {
+    // 超过50个节点时，完全禁用对齐辅助线以提升性能
+    alignmentGuides.value = { vertical: null, horizontal: null }
+    snapPosition.value = { x: null, y: null }
+    return
+  }
   
   // 获取当前节点的位置和尺寸
   const nodeX = draggedNode.position.x
@@ -419,11 +471,26 @@ function calculateAlignmentGuides(draggedNode) {
   alignmentGuides.value = { vertical: null, horizontal: null }
   snapPosition.value = { x: null, y: null }
   
+  // 🚀 性能优化：使用空间索引思路 - 只检查视口内的节点
+  const viewport = canvasStore.viewport
+  const viewportLeft = -viewport.x / viewport.zoom - 500
+  const viewportTop = -viewport.y / viewport.zoom - 500
+  const viewportRight = viewportLeft + window.innerWidth / viewport.zoom + 1000
+  const viewportBottom = viewportTop + window.innerHeight / viewport.zoom + 1000
+  
   // 查找附近的其他节点（排除当前节点和组内节点，因为组内节点会跟随组移动）
   const nearbyNodes = canvasStore.nodes.filter(n => {
     if (n.id === draggedNode.id) return false
     if (n.type === 'group') return false // 排除编组节点
     if (n.data?.groupId && n.data.groupId !== draggedNode.data?.groupId) return false // 排除其他组的节点
+    
+    // 🚀 性能优化：排除视口外的节点
+    const nX = n.position.x
+    const nY = n.position.y
+    if (nX > viewportRight || nX < viewportLeft - 500 ||
+        nY > viewportBottom || nY < viewportTop - 500) {
+      return false
+    }
     
     // 粗略检查是否在附近（扩大范围以优化性能）
     const nWidth = n.dimensions?.width || n.data?.width || 380
