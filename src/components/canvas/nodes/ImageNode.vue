@@ -20,6 +20,7 @@ import ImagePresetDialog from '../dialogs/ImagePresetDialog.vue'
 import ImagePresetManager from '../dialogs/ImagePresetManager.vue'
 import ImageCropper from '../ImageCropper.vue'
 import Camera3DPanel from '../Camera3DPanel.vue'
+import Pose3DViewer from '../Pose3DViewer.vue'
 import { removeBackground } from '@imgly/background-removal'
 
 const { t } = useI18n()
@@ -755,6 +756,9 @@ const cameraAngles = ref({
 })
 const multianglePointsCost = ref(0) // 多角度生成积分消耗
 
+// 3D 姿态分析状态
+const showPose3DViewer = ref(false)
+
 // 预设背景颜色
 const cutoutBgPresets = [
   { id: 'transparent', label: '透明', color: null, icon: '🔲' },
@@ -1475,6 +1479,34 @@ function handleMultiangleGenerateError(data) {
 // 关闭相机面板
 function handleCameraClose() {
   show3DCamera.value = false
+}
+
+// ========== 3D 姿态分析 ==========
+function handleToolbarPose3D() {
+  console.log('[ImageNode] 工具栏：姿态分析', props.id)
+  showPose3DViewer.value = true
+}
+
+function handlePose3DClose() {
+  showPose3DViewer.value = false
+}
+
+function handlePose3DApplyAngle(data) {
+  console.log('[ImageNode] 应用姿态分析角度:', data)
+  // 将角度信息保存到节点数据
+  canvasStore.updateNodeData(props.id, {
+    poseAngle: {
+      azimuth: data.azimuth,
+      elevation: data.elevation,
+      distance: data.distance
+    },
+    posePrompt: data.prompt,
+    poseDescription: data.description
+  })
+  showPose3DViewer.value = false
+  
+  // 显示提示
+  showAlert(`已应用视角：${data.description}`, '成功')
 }
 
 function handleToolbarAnnotate() {
@@ -4091,6 +4123,21 @@ async function handleDrop(event) {
         </svg>
         <span>角度</span>
       </button>
+      <button class="toolbar-btn" :class="{ active: showPose3DViewer }" title="3D姿态分析（正反打）" @mousedown.prevent="handleToolbarPose3D">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <!-- 人物骨架 -->
+          <circle cx="12" cy="4" r="2"/>
+          <line x1="12" y1="6" x2="12" y2="14"/>
+          <line x1="12" y1="8" x2="8" y2="12"/>
+          <line x1="12" y1="8" x2="16" y2="12"/>
+          <line x1="12" y1="14" x2="9" y2="20"/>
+          <line x1="12" y1="14" x2="15" y2="20"/>
+          <!-- 3D 旋转箭头 -->
+          <path d="M20 8c0-2-1.5-3-3-3" stroke-linecap="round" opacity="0.6"/>
+          <path d="M19 5l1 3 3-1" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+        </svg>
+        <span>姿态</span>
+      </button>
       <div class="toolbar-divider"></div>
       <button class="toolbar-btn icon-only" title="标注" @mousedown.prevent="handleToolbarAnnotate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -4132,6 +4179,14 @@ async function handleDrop(event) {
         />
       </Transition>
     </Teleport>
+    
+    <!-- 3D 姿态分析面板 -->
+    <Pose3DViewer
+      :visible="showPose3DViewer"
+      :image-url="currentImageUrl"
+      @close="handlePose3DClose"
+      @apply-angle="handlePose3DApplyAngle"
+    />
     
     <!-- 节点标签 -->
     <div 

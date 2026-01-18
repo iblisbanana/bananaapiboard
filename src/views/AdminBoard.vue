@@ -1509,7 +1509,7 @@ async function togglePaymentEnabled(method) {
   loadingPayment.value = true
   try {
     const r = await fetchWithAdminAuth(`/api/admin/payment-methods/${method.id}/toggle`, {
-      method: 'PUT',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !method.enabled })
     })

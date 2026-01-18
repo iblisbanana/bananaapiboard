@@ -3208,10 +3208,40 @@ function getLedgerTypeText(type) {
   inset: 0;
   background: rgba(26, 26, 26, 0.98);
   border-radius: 20px;
-  padding: 24px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 优化滚动体验 */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.recharge-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.recharge-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.recharge-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.recharge-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 充值面板底部按钮 - 确保不被压缩 */
+.recharge-panel .btn-primary.full-width {
+  flex-shrink: 0;
+  margin-top: auto;
+  min-height: 44px;
 }
 
 .recharge-header {
@@ -4613,6 +4643,267 @@ function getLedgerTypeText(type) {
   
   .price-amount {
     font-size: 28px;
+  }
+}
+
+/* 小屏幕高度适配 - 确保内容可滚动 */
+@media (max-height: 700px) {
+  .profile-panel {
+    max-height: calc(100vh - 60px);
+  }
+  
+  .recharge-panel {
+    padding: 16px;
+    gap: 10px;
+  }
+  
+  .recharge-panel .form-section {
+    gap: 6px;
+  }
+  
+  .recharge-panel .form-label {
+    font-size: 12px;
+  }
+  
+  .recharge-panel .form-input,
+  .recharge-panel .form-select {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  
+  .recharge-panel .amount-btn {
+    padding: 12px;
+    font-size: 14px;
+  }
+  
+  .recharge-panel .price-info {
+    padding: 12px;
+  }
+  
+  .recharge-panel .btn-primary.full-width {
+    padding: 12px 16px;
+    font-size: 14px;
+  }
+  
+  .purchase-modal {
+    max-height: calc(100vh - 30px);
+  }
+  
+  .purchase-modal-body {
+    padding: 16px;
+  }
+  
+  .purchase-modal-footer {
+    padding: 16px;
+  }
+}
+
+/* 超小屏幕高度适配 */
+@media (max-height: 550px) {
+  .profile-panel {
+    max-height: calc(100vh - 40px);
+  }
+  
+  .recharge-panel {
+    padding: 12px;
+    gap: 8px;
+  }
+  
+  .recharge-panel .recharge-header h4 {
+    font-size: 16px;
+  }
+  
+  .recharge-panel .recharge-amounts {
+    gap: 8px;
+  }
+  
+  .recharge-panel .amount-btn {
+    padding: 10px;
+    font-size: 13px;
+  }
+  
+  .recharge-panel .card-btn-v2 {
+    min-height: 40px;
+    padding: 8px;
+  }
+  
+  .recharge-panel .card-amount-v2 {
+    font-size: 14px;
+  }
+  
+  .purchase-modal {
+    max-height: calc(100vh - 20px);
+  }
+  
+  .purchase-modal-header {
+    padding: 16px 20px;
+  }
+  
+  .purchase-modal-header h3 {
+    font-size: 18px;
+  }
+}
+
+/* 宽屏但矮屏幕适配（如超宽显示器） */
+@media (min-width: 1200px) and (max-height: 800px) {
+  .purchase-modal {
+    max-width: 800px;
+    max-height: calc(100vh - 60px);
+  }
+  
+  .purchase-content-grid {
+    gap: 16px;
+  }
+  
+  .package-detail-features {
+    gap: 8px;
+  }
+}
+
+/* 套餐购买弹窗 - 矮屏幕适配 */
+@media (max-height: 650px) {
+  .purchase-modal {
+    max-height: calc(100vh - 20px);
+    border-radius: 16px;
+  }
+  
+  .purchase-modal-header {
+    padding: 14px 20px;
+  }
+  
+  .purchase-modal-header h3 {
+    font-size: 16px;
+  }
+  
+  .purchase-modal-body {
+    padding: 12px 16px;
+  }
+  
+  .purchase-content-grid {
+    gap: 16px;
+  }
+  
+  .package-detail-card {
+    padding: 14px;
+  }
+  
+  .package-detail-name {
+    font-size: 16px;
+  }
+  
+  .price-amount {
+    font-size: 24px;
+  }
+  
+  .feature-item {
+    font-size: 13px;
+    gap: 6px;
+  }
+  
+  .purchase-section {
+    margin-bottom: 12px;
+  }
+  
+  .section-label {
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  
+  .price-breakdown {
+    padding: 10px;
+  }
+  
+  .price-line {
+    font-size: 13px;
+    padding: 4px 0;
+  }
+  
+  .purchase-modal-footer {
+    padding: 12px 16px;
+  }
+  
+  .btn-modal-cancel,
+  .btn-modal-confirm {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+  
+  /* 等待支付视图紧凑化 */
+  .payment-waiting-view,
+  .recharge-waiting-view {
+    padding: 20px 16px;
+  }
+  
+  .waiting-icon-bg {
+    width: 50px;
+    height: 50px;
+  }
+  
+  .waiting-title {
+    font-size: 18px;
+    margin-top: 12px;
+  }
+  
+  .waiting-desc {
+    font-size: 13px;
+  }
+  
+  .waiting-order-info {
+    padding: 12px;
+    margin: 12px 0;
+  }
+  
+  .waiting-tips {
+    margin: 12px 0;
+    gap: 8px;
+  }
+  
+  .tip-number {
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+  }
+  
+  .tip-text {
+    font-size: 12px;
+  }
+  
+  .waiting-actions {
+    gap: 8px;
+  }
+  
+  .btn-waiting-primary {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+}
+
+/* 超矮屏幕 - 强制紧凑布局 */
+@media (max-height: 500px) {
+  .purchase-modal {
+    max-height: 100vh;
+    border-radius: 0;
+  }
+  
+  .purchase-modal-overlay {
+    padding: 0;
+  }
+  
+  .purchase-content-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  
+  .purchase-modal-header {
+    padding: 10px 16px;
+  }
+  
+  .purchase-modal-body {
+    padding: 10px 12px;
+  }
+  
+  .purchase-modal-footer {
+    padding: 10px 12px;
   }
 }
 

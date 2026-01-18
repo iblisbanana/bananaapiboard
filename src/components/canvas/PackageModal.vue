@@ -467,57 +467,58 @@ watch(() => props.visible, (newVal) => {
           </button>
         </div>
 
-        <!-- 当前套餐信息 -->
-        <div v-if="activePackage" class="active-package-banner">
-          <div class="banner-content">
-            <div class="banner-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22 4 12 14.01 9 11.01"/>
-              </svg>
-            </div>
-            <div class="banner-info">
-              <div class="banner-label">当前套餐</div>
-              <div class="banner-name">{{ activePackage.package_name }}</div>
-            </div>
-            <div class="banner-stats">
-              <div class="stat-item">
-                <div class="stat-label">并发</div>
-                <div class="stat-value">{{ activePackage.concurrent_limit }}</div>
-              </div>
-              <div class="stat-divider"></div>
-              <div class="stat-item">
-                <div class="stat-label">剩余</div>
-                <div class="stat-value">{{ formatRemainingTime(activePackage.expires_at) }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 余额显示 -->
-        <div class="balance-banner">
-          <div class="balance-content">
-            <svg class="balance-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
-              <line x1="1" y1="10" x2="23" y2="10"/>
-            </svg>
-            <span class="balance-label">账户余额</span>
-            <span class="balance-value">¥{{ ((user?.balance || 0) / 100).toFixed(2) }}</span>
-          </div>
-        </div>
-
-        <!-- 错误提示 -->
-        <div v-if="error" class="error-banner">
-          <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          <span>{{ error }}</span>
-        </div>
-
-        <!-- 套餐列表 -->
+        <!-- 可滚动的内容区域 -->
         <div class="package-modal-body">
+          <!-- 当前套餐信息 -->
+          <div v-if="activePackage" class="active-package-banner">
+            <div class="banner-content">
+              <div class="banner-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+              </div>
+              <div class="banner-info">
+                <div class="banner-label">当前套餐</div>
+                <div class="banner-name">{{ activePackage.package_name }}</div>
+              </div>
+              <div class="banner-stats">
+                <div class="stat-item">
+                  <div class="stat-label">并发</div>
+                  <div class="stat-value">{{ activePackage.concurrent_limit }}</div>
+                </div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">
+                  <div class="stat-label">剩余</div>
+                  <div class="stat-value">{{ formatRemainingTime(activePackage.expires_at) }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 余额显示 -->
+          <div class="balance-banner">
+            <div class="balance-content">
+              <svg class="balance-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                <line x1="1" y1="10" x2="23" y2="10"/>
+              </svg>
+              <span class="balance-label">账户余额</span>
+              <span class="balance-value">¥{{ ((user?.balance || 0) / 100).toFixed(2) }}</span>
+            </div>
+          </div>
+
+          <!-- 错误提示 -->
+          <div v-if="error" class="error-banner">
+            <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span>{{ error }}</span>
+          </div>
+
+          <!-- 套餐列表 -->
           <div v-if="loading" class="loading-state">
             <div class="loading-spinner"></div>
             <p>加载套餐中...</p>
@@ -1068,7 +1069,29 @@ watch(() => props.visible, (newVal) => {
 .package-modal-body {
   flex: 1;
   overflow-y: auto;
-  padding: 0 32px 32px;
+  overflow-x: hidden;
+  padding: 16px 32px 32px;
+  /* 优化滚动体验 */
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.package-modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.package-modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.package-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.package-modal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 /* 加载状态 */
@@ -2101,6 +2124,177 @@ watch(() => props.visible, (newVal) => {
 
   .payment-grid {
     flex-direction: column;
+  }
+}
+
+/* 矮屏幕适配 - 确保支付按钮可见 */
+@media (max-height: 700px) {
+  .package-modal-container {
+    max-height: calc(100vh - 40px);
+  }
+  
+  .package-modal-header {
+    padding: 16px 24px;
+  }
+  
+  .header-title {
+    font-size: 18px;
+  }
+  
+  .package-modal-body {
+    padding: 0 24px 24px;
+  }
+  
+  .active-package-banner,
+  .balance-banner {
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  
+  .packages-grid {
+    gap: 14px;
+  }
+  
+  .package-card {
+    padding: 18px;
+  }
+  
+  .package-name {
+    font-size: 16px;
+  }
+  
+  .package-description {
+    font-size: 12px;
+  }
+  
+  .package-price-display {
+    font-size: 22px;
+    margin: 10px 0;
+  }
+  
+  .features-list {
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  
+  .purchase-button {
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+}
+
+@media (max-height: 550px) {
+  .package-modal-container {
+    max-height: 100vh;
+    border-radius: 12px;
+  }
+  
+  .package-modal-header {
+    padding: 12px 20px;
+  }
+  
+  .package-modal-body {
+    padding: 0 16px 16px;
+  }
+  
+  .packages-grid {
+    gap: 10px;
+  }
+  
+  .package-card {
+    padding: 14px;
+  }
+  
+  .package-price-display {
+    font-size: 20px;
+    margin: 8px 0;
+  }
+  
+  /* 购买确认弹窗紧凑化 */
+  .purchase-modal {
+    padding: 20px;
+  }
+  
+  .purchase-modal-body {
+    padding: 16px;
+    gap: 14px;
+  }
+  
+  .benefits-grid {
+    gap: 10px;
+  }
+  
+  .benefit-item {
+    padding: 10px;
+  }
+  
+  .price-summary {
+    padding: 14px;
+  }
+  
+  .purchase-modal-footer {
+    padding: 16px;
+    gap: 10px;
+  }
+  
+  .btn-cancel,
+  .btn-confirm {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+}
+
+/* 等待支付视图响应式 */
+@media (max-height: 600px) {
+  .waiting-view {
+    padding: 24px 20px;
+  }
+  
+  .waiting-icon-container {
+    margin-bottom: 16px;
+  }
+  
+  .waiting-icon-bg {
+    width: 56px;
+    height: 56px;
+  }
+  
+  .waiting-title {
+    font-size: 18px;
+  }
+  
+  .waiting-subtitle {
+    font-size: 13px;
+  }
+  
+  .order-info-card {
+    padding: 12px 16px;
+    margin: 12px 0;
+  }
+  
+  .waiting-steps {
+    margin: 12px 0;
+    gap: 6px;
+  }
+  
+  .step-number {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+  }
+  
+  .step-text {
+    font-size: 12px;
+  }
+  
+  .waiting-actions {
+    gap: 8px;
+    margin-top: 16px;
+  }
+  
+  .btn-confirm-payment {
+    padding: 10px 24px;
+    font-size: 14px;
   }
 }
 </style>
